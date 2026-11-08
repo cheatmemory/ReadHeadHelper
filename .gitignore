@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# 本地/系统
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.*
+
+# 导出稿（示例保留）
+*.docx
+!examples/out/*.docx
+
+# SDK 大模型（约 400MB+，需自行放置）
+third_party/govdoc-sdk/model.onnx
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.swp
+*~

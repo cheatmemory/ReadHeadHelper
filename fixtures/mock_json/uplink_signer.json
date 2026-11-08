@@ -1,0 +1,31 @@
+{
+  "header": {
+    "copy_number": "",
+    "secret_level": "",
+    "secret_period": "",
+    "urgency": "",
+    "issuer_sign": "张三、李四",
+    "org_mark": "××市教育局",
+    "doc_number": "×教请〔2024〕3号"
+  },
+  "main": {
+    "title": "关于申请增设义务教育学位的请示",
+    "recipient": "市政府：",
+    "body_blocks": [
+      "为缓解学位供需矛盾，现请示如下：",
+      "一、基本情况",
+      "近年来入学适龄人口持续增加。",
+      "二、请示事项",
+      "恳请批准在主城区增设学位。"
+    ],
+    "attachment_caption": ""
+  },
+  "footer": {
+    "date": "2024年2月8日",
+    "note": "",
+    "attachment": "",
+    "org_signature": "××市教育局",
+    "print_org": "××市教育局办公室",
+    "print_date": "2024年2月9日"
+  }
+}

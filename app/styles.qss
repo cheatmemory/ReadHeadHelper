@@ -1,0 +1,97 @@
+* {
+  font-family: "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  color: #162033;
+}
+QMainWindow, QWidget#Central {
+  background: #f7f8fb;
+}
+QLabel#AppTitle {
+  font-size: 16px;
+  font-weight: 700;
+}
+QLabel#AppSub {
+  color: #5b677a;
+  font-size: 12px;
+}
+QFrame#TopBar, QFrame#FooterBar {
+  background: #ffffff;
+  border-bottom: 1px solid #d7dde8;
+}
+QFrame#FooterBar {
+  border-top: 1px solid #d7dde8;
+  border-bottom: none;
+}
+QPushButton {
+  background: #ffffff;
+  border: 1px solid #b8c2d4;
+  border-radius: 6px;
+  padding: 8px 14px;
+}
+QPushButton:hover { background: #f3f5f9; }
+QPushButton:disabled { color: #9aa3b2; background: #f3f5f8; }
+QPushButton#Primary {
+  background: #162033;
+  color: #ffffff;
+  border-color: #162033;
+}
+QPushButton#Primary:hover { background: #24324a; }
+QPushButton#Accent {
+  background: #b4232c;
+  color: #ffffff;
+  border-color: #961c24;
+}
+QPushButton#StepBtn {
+  border: none;
+  border-radius: 0;
+  padding: 12px 8px;
+  color: #5b677a;
+  background: transparent;
+}
+QPushButton#StepBtn[active="true"] {
+  color: #162033;
+  font-weight: 700;
+  border-bottom: 2px solid #b4232c;
+}
+QTextEdit, QPlainTextEdit, QLineEdit {
+  background: #ffffff;
+  border: 1px solid #d7dde8;
+  border-radius: 6px;
+  padding: 8px;
+  selection-background-color: #c7d3e8;
+}
+QGroupBox {
+  background: #ffffff;
+  border: 1px solid #d7dde8;
+  border-radius: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  font-weight: 600;
+}
+QGroupBox::title {
+  subcontrol-origin: margin;
+  left: 10px;
+  padding: 0 4px;
+}
+QLabel#Hint { color: #8a95a8; font-size: 11px; }
+QPushButton#NoneToggle {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: #5b677a;
+  background: transparent;
+}
+QPushButton#NoneToggle[pressed="true"] {
+  background: #e8edf4;
+  border-color: #c5cedc;
+  color: #2c3a52;
+}
+QPushButton#SealOption {
+  text-align: left;
+  padding: 12px;
+  border-radius: 8px;
+}
+QPushButton#SealOption[selected="true"] {
+  background: #f8e9ea;
+  border-color: #b4232c;
+}

@@ -1,0 +1,1769 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>公文排版助手</title>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <style>
+    :root {
+      --ink: #162033;
+      --ink-soft: #2c3a52;
+      --muted: #5b677a;
+      --line: #d7dde8;
+      --line-strong: #b8c2d4;
+      --paper: #eef1f6;
+      --surface: #f7f8fb;
+      --panel: #ffffff;
+      --red: #b4232c;
+      --red-soft: #f8e9ea;
+      --ok: #0f7a4c;
+      --ok-soft: #e7f5ee;
+      --warn: #9a6700;
+      --warn-soft: #fff6e0;
+      --focus: #2f5ea8;
+      --radius: 6px;
+      --shadow: 0 18px 48px rgba(22, 32, 51, 0.18);
+      /* 优先系统字体，避免网页字体缩放发糊 */
+      --font-ui: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+      --font-doc: "SimSun", "Songti SC", serif;
+      --ease: 180ms ease;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: var(--font-ui);
+      color: var(--ink);
+      background: var(--surface);
+      min-height: 100%;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--ok-soft);
+      border: 1px solid #b6dec8;
+      font-size: 12px;
+      color: var(--ok);
+    }
+    .badge i {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--ok); display: inline-block;
+    }
+
+    .app {
+      background: var(--surface);
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 22px;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .app-mark {
+      width: 28px; height: 28px; border-radius: 6px;
+      background: linear-gradient(145deg, #c8333c, #8f1a22);
+      display: grid; place-items: center;
+      color: #fff; font-size: 14px; font-weight: 700;
+      font-family: var(--font-doc);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.2);
+      flex: 0 0 auto;
+    }
+    .app-title {
+      font-size: 16px; font-weight: 700; letter-spacing: 0.02em;
+      display: block; line-height: 1.2;
+    }
+    .app-sub {
+      font-size: 12px; color: var(--muted); display: block; margin-top: 2px;
+    }
+
+    .stepper {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      padding: 0 8px;
+    }
+    .step {
+      appearance: none; border: 0; background: transparent;
+      font: inherit; cursor: pointer; color: var(--muted);
+      padding: 14px 8px 12px; position: relative;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      transition: color var(--ease), background var(--ease);
+      font-size: 13px;
+    }
+    .step .label { white-space: nowrap; }
+    .step:hover { color: var(--ink); background: #fafbfd; }
+    .step:focus-visible {
+      outline: 2px solid var(--focus); outline-offset: -2px;
+    }
+    .step .n {
+      width: 22px; height: 22px; border-radius: 50%;
+      border: 1px solid var(--line-strong);
+      display: grid; place-items: center;
+      font-size: 12px; font-weight: 600;
+      background: #fff;
+    }
+    .step.active { color: var(--ink); font-weight: 600; }
+    .step.active .n {
+      background: var(--ink); color: #fff; border-color: var(--ink);
+    }
+    .step.done { color: var(--ok); }
+    .step.done .n {
+      background: var(--ok-soft); color: var(--ok); border-color: #9fd0b5;
+    }
+    .step::after {
+      content: "";
+      position: absolute; left: 12%; right: 12%; bottom: 0; height: 2px;
+      background: transparent; border-radius: 2px 2px 0 0;
+    }
+    .step.active::after { background: var(--red); }
+
+    .main {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      min-height: 0;
+      background: var(--surface);
+      overflow: hidden;
+    }
+    .pane {
+      min-width: 0; min-height: 0;
+      overflow: auto;
+      padding: 20px 22px;
+    }
+    .pane + .pane {
+      border-left: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+
+    .pane-head {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 16px; margin-bottom: 18px;
+    }
+    .pane-head h1 {
+      margin: 0 0 6px; font-size: 20px; font-weight: 700; letter-spacing: 0.01em;
+    }
+    .pane-head p {
+      margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55;
+      max-width: 46ch;
+    }
+
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    }
+
+    .btn {
+      appearance: none; border: 1px solid var(--line-strong);
+      background: #fff; color: var(--ink);
+      font: inherit; font-size: 13px; font-weight: 500;
+      padding: 8px 14px; border-radius: var(--radius);
+      cursor: pointer; display: inline-flex; align-items: center; gap: 7px;
+      transition: background var(--ease), border-color var(--ease), color var(--ease), transform var(--ease);
+    }
+    .btn:hover { background: #f3f5f9; border-color: #9eabc0; }
+    .btn:active { transform: translateY(1px); }
+    .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .btn.primary {
+      background: var(--ink); color: #fff; border-color: var(--ink);
+    }
+    .btn.primary:hover { background: #24324a; }
+    .btn.accent {
+      background: var(--red); color: #fff; border-color: #961c24;
+    }
+    .btn.accent:hover { background: #9b1d25; }
+    .btn.ghost { background: transparent; }
+    .btn:disabled {
+      opacity: 0.45; cursor: not-allowed; transform: none;
+    }
+    .btn svg { width: 16px; height: 16px; flex: 0 0 auto; }
+
+    .dropzone {
+      border: 1.5px dashed #aeb9cb;
+      border-radius: 10px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.9), rgba(247,248,251,0.95)),
+        repeating-linear-gradient(-45deg, transparent, transparent 8px, rgba(22,32,51,0.015) 8px, rgba(22,32,51,0.015) 16px);
+      padding: 28px 20px;
+      text-align: center;
+      transition: border-color var(--ease), background var(--ease);
+    }
+    .dropzone:hover, .dropzone.drag {
+      border-color: var(--red);
+      background: #fff;
+    }
+    .dropzone .icon-wrap {
+      width: 48px; height: 48px; margin: 0 auto 12px;
+      border-radius: 12px; background: var(--red-soft); color: var(--red);
+      display: grid; place-items: center;
+    }
+    .dropzone h2 {
+      margin: 0 0 6px; font-size: 16px; font-weight: 600;
+    }
+    .dropzone p {
+      margin: 0 auto 14px; color: var(--muted); font-size: 13px; max-width: 36ch;
+    }
+    .or {
+      display: flex; align-items: center; gap: 12px;
+      margin: 16px 0; color: var(--muted); font-size: 12px;
+    }
+    .or::before, .or::after {
+      content: ""; flex: 1; height: 1px; background: var(--line);
+    }
+
+    .textarea {
+      width: 100%; min-height: 220px; resize: vertical;
+      border: 1px solid var(--line); border-radius: var(--radius);
+      padding: 12px 14px; font: inherit; font-size: 13.5px; line-height: 1.7;
+      color: var(--ink); background: #fff;
+      transition: border-color var(--ease), box-shadow var(--ease);
+    }
+    .textarea:focus {
+      outline: none; border-color: var(--focus);
+      box-shadow: 0 0 0 3px rgba(47, 94, 168, 0.15);
+    }
+    .textarea::placeholder { color: #939cac; }
+
+    .meta-row {
+      display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;
+    }
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 10px; border-radius: 999px;
+      background: #fff; border: 1px solid var(--line);
+      font-size: 12px; color: var(--muted);
+    }
+    .chip.ok { background: var(--ok-soft); border-color: #b6dec8; color: var(--ok); }
+    .chip.warn { background: var(--warn-soft); border-color: #f0d59a; color: var(--warn); }
+
+    .side-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px;
+    }
+    .side-card + .side-card { margin-top: 12px; }
+    .side-card h3 {
+      margin: 0 0 10px; font-size: 13px; font-weight: 600;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .side-card ul {
+      margin: 0; padding: 0; list-style: none;
+      display: grid; gap: 8px;
+    }
+    .side-card li {
+      display: flex; gap: 8px; align-items: flex-start;
+      font-size: 12.5px; color: var(--ink-soft); line-height: 1.45;
+    }
+    .side-card li svg { width: 15px; height: 15px; margin-top: 1px; color: var(--muted); flex: 0 0 auto; }
+
+    .status-pill {
+      font-size: 11px; font-weight: 600; padding: 2px 8px;
+      border-radius: 999px; background: var(--warn-soft); color: var(--warn);
+    }
+    .status-pill.ok { background: var(--ok-soft); color: var(--ok); }
+    .status-pill.mock { background: #eef2ff; color: #3b4f9a; }
+    #req-list { display: grid; gap: 8px; }
+    #req-list li {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12.5px; line-height: 1.4;
+    }
+    #req-list li .mark {
+      width: 18px; height: 18px; border-radius: 50%;
+      display: grid; place-items: center;
+      font-size: 11px; font-weight: 700; flex: 0 0 auto;
+    }
+    #req-list li.is-ok { color: var(--ok); }
+    #req-list li.is-ok .mark { background: var(--ok-soft); color: var(--ok); }
+    #req-list li.is-missing { color: #8a1f1f; }
+    #req-list li.is-missing .mark { background: #fdecec; color: #b4232c; }
+    #req-list li .lab { flex: 1; min-width: 0; }
+    #req-list li .hint-mini {
+      font-size: 11px; color: var(--muted); white-space: nowrap;
+    }
+    #req-list li.is-missing .hint-mini { color: #c45c5c; }
+
+    /* Confirm page */
+    .section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px 16px 16px;
+      margin-bottom: 12px;
+    }
+    .section-h {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; margin-bottom: 12px;
+      padding-bottom: 10px; border-bottom: 1px solid #eef1f6;
+    }
+    .section-h h2 {
+      margin: 0; font-size: 14px; font-weight: 650;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .section-h h2 .dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--red);
+    }
+    .req { color: var(--red); font-weight: 700; margin-left: 2px; }
+
+    .grid-2 {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px;
+    }
+    .field { display: grid; gap: 8px; align-content: start; }
+    .field.full { grid-column: 1 / -1; }
+    .field-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; min-height: 24px;
+    }
+    .field-head label {
+      font-size: 13px; color: var(--ink-soft); font-weight: 500;
+      display: inline-flex; align-items: center; gap: 6px; min-width: 0;
+    }
+    .tag-opt {
+      font-size: 11px; font-weight: 500; color: var(--muted);
+      background: #eef1f6; border-radius: 4px; padding: 1px 6px;
+      white-space: nowrap;
+    }
+    .field-actions {
+      display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
+    }
+    .none-toggle {
+      appearance: none; border: 1px solid transparent;
+      background: transparent; color: var(--muted);
+      font: inherit; font-size: 12px; font-weight: 500;
+      line-height: 1; padding: 4px 8px; border-radius: 4px;
+      cursor: pointer; white-space: nowrap;
+      transition: background var(--ease), border-color var(--ease), color var(--ease);
+    }
+    .none-toggle:hover { background: #eef1f6; color: var(--ink-soft); }
+    .none-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .none-toggle[aria-pressed="true"] {
+      background: #e8edf4; border-color: #c5cedc; color: var(--ink-soft);
+    }
+    .none-toggle[aria-pressed="true"]::before {
+      content: "✓ ";
+      font-weight: 700;
+    }
+    .mini-toggle {
+      appearance: none; border: 1px solid var(--line);
+      background: #fff; color: var(--muted);
+      font: inherit; font-size: 12px; font-weight: 500;
+      line-height: 1; padding: 5px 10px; border-radius: 999px;
+      cursor: pointer; white-space: nowrap;
+    }
+    .mini-toggle[aria-pressed="true"] {
+      background: #e8eef7; border-color: #9eb2d4; color: #2f5ea8;
+    }
+    .field input, .field select, .field textarea {
+      width: 100%; border: 1px solid var(--line); border-radius: var(--radius);
+      padding: 9px 11px; font: inherit; font-size: 13px; background: #fff;
+      color: var(--ink); min-height: 40px;
+    }
+    .field textarea { min-height: 72px; resize: vertical; line-height: 1.6; }
+    .field input:focus, .field select:focus, .field textarea:focus {
+      outline: none; border-color: var(--focus);
+      box-shadow: 0 0 0 3px rgba(47, 94, 168, 0.12);
+    }
+    .field.invalid input, .field.invalid select {
+      border-color: #d64545;
+      box-shadow: 0 0 0 3px rgba(214, 69, 69, 0.12);
+    }
+    .field.is-none input,
+    .field.is-none textarea {
+      background: #f3f5f8;
+      color: var(--muted);
+      border-style: dashed;
+      cursor: not-allowed;
+    }
+    .hint { font-size: 11px; color: #8a95a8; line-height: 1.4; }
+
+    .seal-group {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+    }
+    .seal-option {
+      border: 1px solid var(--line);
+      border-radius: 8px; padding: 12px;
+      background: #fff; cursor: pointer; text-align: left;
+      transition: border-color var(--ease), background var(--ease), box-shadow var(--ease);
+    }
+    .seal-option:hover { border-color: #9eabc0; }
+    .seal-option.selected {
+      border-color: var(--red);
+      background: var(--red-soft);
+      box-shadow: inset 0 0 0 1px rgba(180, 35, 44, 0.2);
+    }
+    .seal-option strong {
+      display: block; font-size: 13px; margin-bottom: 4px;
+    }
+    .seal-option span {
+      font-size: 12px; color: var(--muted); line-height: 1.45;
+    }
+
+    .alert {
+      display: flex; gap: 10px; align-items: flex-start;
+      padding: 10px 12px; border-radius: 8px;
+      background: var(--warn-soft); border: 1px solid #f0d59a;
+      color: #6b4a00; font-size: 12.5px; line-height: 1.5;
+      margin-bottom: 12px;
+    }
+    .alert.error {
+      background: #fdecec; border-color: #f0b4b4; color: #8a1f1f;
+    }
+    .alert svg { width: 16px; height: 16px; flex: 0 0 auto; margin-top: 1px; }
+
+    /* Body structure */
+    .body-layout {
+      display: grid; grid-template-columns: 1fr; gap: 12px;
+    }
+    .struct-toolbar {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      padding: 10px; background: #fff; border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .struct-toolbar .btn { padding: 6px 10px; font-size: 12px; }
+    .body-editor {
+      background: #fff; border: 1px solid var(--line); border-radius: 8px;
+      padding: 8px; min-height: 360px;
+    }
+    .block {
+      display: grid; grid-template-columns: 72px 1fr auto;
+      gap: 8px; align-items: start;
+      padding: 8px; border-radius: 6px;
+      border: 1px solid transparent;
+      cursor: text;
+    }
+    .block:hover { background: #f7f9fc; }
+    .block.selected {
+      background: #f3f6fb; border-color: #c7d3e8;
+    }
+    .tag {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+      padding: 3px 6px; border-radius: 4px; text-align: center;
+      margin-top: 3px;
+    }
+    .tag.h1 { background: #162033; color: #fff; }
+    .tag.h2 { background: #34507a; color: #fff; }
+    .tag.h3 { background: #e8eef7; color: #34507a; }
+    .tag.h4 { background: #f1f3f7; color: #5b677a; }
+    .tag.p  { background: #f1f3f7; color: #8a95a8; }
+    .block-text {
+      font-size: 13.5px; line-height: 1.75; white-space: pre-wrap;
+      outline: none; min-height: 24px;
+    }
+    .block-text.h1 { font-weight: 700; }
+    .block-text.h2 { font-weight: 600; }
+    .block-actions {
+      position: relative;
+      opacity: 0;
+      transition: opacity var(--ease);
+    }
+    .block:hover .block-actions,
+    .block.selected .block-actions,
+    .block-actions.open { opacity: 1; }
+    .more-btn {
+      appearance: none; border: 1px solid transparent;
+      background: transparent; color: var(--muted);
+      width: 28px; height: 28px; border-radius: 6px;
+      cursor: pointer; font: inherit; font-size: 16px; line-height: 1;
+      padding: 0;
+    }
+    .more-btn:hover { background: #e8eef7; color: var(--ink); border-color: var(--line); }
+    .more-menu {
+      display: none; position: absolute; right: 0; top: calc(100% + 4px);
+      min-width: 120px; padding: 4px;
+      background: #fff; border: 1px solid var(--line);
+      border-radius: 8px; box-shadow: 0 8px 24px rgba(22,32,51,0.12);
+      z-index: 5;
+    }
+    .block-actions.open .more-menu { display: grid; gap: 2px; }
+    .more-menu button {
+      appearance: none; border: 0; background: transparent;
+      text-align: left; font: inherit; font-size: 12.5px;
+      padding: 8px 10px; border-radius: 6px; cursor: pointer; color: var(--ink);
+    }
+    .more-menu button:hover { background: #f3f6fb; }
+    .more-menu button.danger { color: var(--red); }
+
+    /* Export / preview */
+    .doc-sheet {
+      width: min(100%, 420px);
+      margin: 0 auto;
+      aspect-ratio: 210 / 297;
+      background: #fff;
+      border: 1px solid var(--line-strong);
+      box-shadow: 0 10px 30px rgba(22,32,51,0.08);
+      padding: 8% 9% 10%;
+      position: relative;
+      font-family: var(--font-doc);
+      color: #111;
+      overflow: hidden;
+    }
+    .doc-sheet::before {
+      content: "";
+      position: absolute; inset: 7.5% 8.5%;
+      border: 1px dashed #e5e8ef; pointer-events: none;
+    }
+    .doc-org {
+      text-align: center; color: var(--red);
+      font-size: 22px; font-weight: 700; letter-spacing: 0.12em;
+      margin-top: 18%; line-height: 1.2;
+    }
+    .doc-no {
+      text-align: center; font-size: 11px; margin-top: 10%;
+      font-family: var(--font-ui);
+    }
+    .doc-line {
+      height: 2px; background: var(--red); margin: 4% 0 8%;
+    }
+    .doc-title {
+      text-align: center; font-size: 14px; font-weight: 700;
+      line-height: 1.45; margin-bottom: 6%;
+    }
+    .doc-to {
+      font-size: 11px; margin-bottom: 4%; font-family: var(--font-ui);
+    }
+    .doc-body {
+      font-size: 11px; line-height: 1.85; text-indent: 2em;
+      font-family: var(--font-ui);
+    }
+    .doc-sign {
+      margin-top: 10%; text-align: right; font-size: 11px;
+      line-height: 1.8; font-family: var(--font-ui);
+      padding-right: 12%;
+    }
+    .doc-footer {
+      position: absolute; left: 9%; right: 9%; bottom: 7%;
+      border-top: 2px solid #333; padding-top: 4px;
+      font-size: 10px; color: #333; font-family: var(--font-ui);
+      display: flex; justify-content: space-between;
+    }
+
+    .export-actions {
+      display: grid; gap: 10px; margin-top: 16px;
+    }
+    .path-box {
+      display: flex; gap: 8px; align-items: center;
+      background: #fff; border: 1px solid var(--line);
+      border-radius: var(--radius); padding: 8px 10px;
+      font-size: 12px; color: var(--muted);
+    }
+    .path-box code {
+      flex: 1; color: var(--ink-soft); font-family: ui-monospace, Consolas, monospace;
+      font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+
+    .footerbar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; padding: 12px 18px;
+      background: #fff; border-top: 1px solid var(--line);
+    }
+    .footer-left {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 12px; color: var(--muted);
+    }
+    .footer-right { display: flex; gap: 8px; }
+
+    .view { display: none; }
+    .view.active { display: contents; }
+    .view.active > .pane { display: block; }
+
+    .toast {
+      position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(12px);
+      background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 8px;
+      font-size: 13px; opacity: 0; pointer-events: none;
+      transition: opacity 200ms ease, transform 200ms ease;
+      z-index: 20; box-shadow: 0 10px 24px rgba(0,0,0,0.2);
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    @media (max-width: 900px) {
+      .main { grid-template-columns: 1fr; }
+      .pane + .pane { border-left: 0; border-top: 1px solid var(--line); }
+      .grid-2, .seal-group { grid-template-columns: 1fr; }
+      .doc-sheet { width: 100%; }
+      .topbar, .pane, .footerbar { padding-left: 14px; padding-right: 14px; }
+    }
+    @media (max-width: 720px) {
+      .step .label { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition: none !important; animation: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app" role="application" aria-label="公文排版助手">
+    <header class="topbar">
+      <div class="brand">
+        <div class="app-mark" aria-hidden="true">公</div>
+        <div>
+          <span class="app-title">公文排版助手</span>
+          <span class="app-sub" id="app-sub">本地离线 · 正在连接后端…</span>
+        </div>
+      </div>
+      <div class="badge"><i></i> 纯本地 · GB/T 9704-2012</div>
+    </header>
+
+    <nav class="stepper" aria-label="流程步骤">
+        <button class="step active" data-step="1" type="button"><span class="n">1</span><span class="label">导入文稿</span></button>
+        <button class="step" data-step="2" type="button"><span class="n">2</span><span class="label">确认要素</span></button>
+        <button class="step" data-step="3" type="button"><span class="n">3</span><span class="label">正文结构</span></button>
+        <button class="step" data-step="4" type="button"><span class="n">4</span><span class="label">生成导出</span></button>
+      </nav>
+
+      <div class="main">
+        <!-- STEP 1 -->
+        <section class="view active" data-view="1">
+          <div class="pane">
+            <div class="pane-head">
+              <div>
+                <h1>导入文稿</h1>
+                <p>粘贴纯文本，或上传 docx（仅抽取文本）。识别走本地 Mock/ONNX，不上传网络。</p>
+              </div>
+              <div class="toolbar">
+                <button class="btn" type="button" id="btn-load-sample">
+                  <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M213.66,82.34l-56-56A8,8,0,0,0,152,24H56A16,16,0,0,0,40,40V216a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V88A8,8,0,0,0,213.66,82.34ZM160,51.31,188.69,80H160ZM200,216H56V40h88V88a8,8,0,0,0,8,8h48Z"/></svg>
+                  载入样例
+                </button>
+              </div>
+            </div>
+
+            <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="上传 docx 文件">
+              <div class="icon-wrap" aria-hidden="true">
+                <svg width="24" height="24" viewBox="0 0 256 256" fill="currentColor"><path d="M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0ZM93.66,77.66,120,51.31V144a8,8,0,0,0,16,0V51.31l26.34,26.35a8,8,0,0,0,11.32-11.32l-40-40a8,8,0,0,0-11.32,0l-40,40A8,8,0,0,0,93.66,77.66Z"/></svg>
+              </div>
+              <h2>拖入或选择 Word 文件</h2>
+              <p>支持 .docx。程序只抽取纯文本，再进入同一识别链路。</p>
+              <button class="btn" type="button" id="btn-pick">选择文件</button>
+              <input type="file" id="file-input" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden />
+            </div>
+
+            <div class="or">或粘贴文本</div>
+
+            <label class="field" for="raw-text">
+              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">公文原文</span>
+              <textarea class="textarea" id="raw-text" placeholder="在此粘贴公文全文……&#10;&#10;××市人民政府文件&#10;×政发〔2024〕12号&#10;关于……的通知&#10;各区县人民政府……"></textarea>
+            </label>
+
+            <div class="meta-row">
+              <span class="chip" id="char-count">0 字</span>
+              <span class="chip ok">识别器：Mock</span>
+              <span class="chip">ONNX 未启用</span>
+            </div>
+          </div>
+
+          <div class="pane">
+            <div class="side-card">
+              <h3>流程说明 <span class="status-pill mock">预览</span></h3>
+              <ul>
+                <li>
+                  <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm48-88a8,8,0,0,1-8,8H136v32a8,8,0,0,1-16,0V136H88a8,8,0,0,1,0-16h32V88a8,8,0,0,1,16,0v32h32A8,8,0,0,1,176,128Z"/></svg>
+                  抽取文本后，由 FieldRecognizer 输出结构化 JSON
+                </li>
+                <li>
+                  <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M229.66,77.66l-128,128a8,8,0,0,1-11.32,0l-56-56a8,8,0,0,1,11.32-11.32L96,188.69,218.34,66.34a8,8,0,0,1,11.32,11.32Z"/></svg>
+                  确认页补全 seal_mode、抄送、联合机关等排版字段
+                </li>
+                <li>
+                  <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM40,56H216V88H40ZM40,200V104H216v96Z"/></svg>
+                  DocxEngine 只吃 LayoutIR，按国标生成 docx
+                </li>
+              </ul>
+            </div>
+            <div class="side-card">
+              <h3>验收口径</h3>
+              <ul>
+                <li><svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-8,56a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm8,104a12,12,0,1,1,12-12A12,12,0,0,1,128,184Z"/></svg>不生成印章图形；盖章由用户完成</li>
+                <li><svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-8,56a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm8,104a12,12,0,1,1,12-12A12,12,0,0,1,128,184Z"/></svg>不做 PDF 导出；可用 WPS 打开验收</li>
+                <li><svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-8,56a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm8,104a12,12,0,1,1,12-12A12,12,0,0,1,128,184Z"/></svg>以数值可核对为准，不只「看起来像」</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- STEP 2 -->
+        <section class="view" data-view="2">
+          <div class="pane">
+            <div class="pane-head">
+              <div>
+                <h1>确认要素</h1>
+                <p>核对识别结果。必填为空会阻断导出；选填为空时点右侧「无此项」确认，或补填内容。</p>
+              </div>
+              <div class="toolbar">
+                <span class="chip ok">已识别 14 项</span>
+                <span class="chip warn">必填待确认</span>
+              </div>
+            </div>
+
+            <div class="alert" id="confirm-alert">
+              <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M236.8,188.09,149.35,36.22a24.76,24.76,0,0,0-42.7,0L19.2,188.09a23.51,23.51,0,0,0,0,23.72A24.34,24.34,0,0,0,40.55,224h174.9a24.34,24.34,0,0,0,21.33-12.19A23.51,23.51,0,0,0,236.8,188.09ZM120,104a8,8,0,0,1,16,0v40a8,8,0,0,1-16,0Zm8,88a12,12,0,1,1,12-12A12,12,0,0,1,128,192Z"/></svg>
+              <div>请先选择<strong>有章 / 无章版式</strong>。未选择时无法进入导出。</div>
+            </div>
+
+            <div class="section">
+              <div class="section-h">
+                <h2><span class="dot"></span>落款版式<span class="req">*</span></h2>
+                <span class="hint">seal_mode · 必选</span>
+              </div>
+              <div class="seal-group" role="radiogroup" aria-label="落款版式">
+                <button type="button" class="seal-option" data-seal="stamp_layout" role="radio" aria-checked="false">
+                  <strong>有章版式</strong>
+                  <span>成文日期右空四字；署名相对日期居中预留章位。</span>
+                </button>
+                <button type="button" class="seal-option" data-seal="no_stamp_layout" role="radio" aria-checked="false">
+                  <strong>无章版式</strong>
+                  <span>署名右空二字；日期首字比署名右移二字。</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="section">
+              <div class="section-h">
+                <h2><span class="dot"></span>版头</h2>
+                <span class="hint">选填项可点右侧「无此项」确认空缺</span>
+              </div>
+              <div class="grid-2">
+                <div class="field is-none">
+                  <div class="field-head">
+                    <label for="f-copy">份号 <span class="tag-opt">选填</span></label>
+                    <button type="button" class="none-toggle" aria-pressed="true" aria-controls="f-copy">无此项</button>
+                  </div>
+                  <input id="f-copy" value="" placeholder="如 000001" disabled />
+                </div>
+                <div class="field is-none">
+                  <div class="field-head">
+                    <label for="f-secret">密级 / 期限 <span class="tag-opt">选填</span></label>
+                    <button type="button" class="none-toggle" aria-pressed="true" aria-controls="f-secret">无此项</button>
+                  </div>
+                  <input id="f-secret" value="" placeholder="机密★10年" disabled />
+                </div>
+                <div class="field is-none">
+                  <div class="field-head">
+                    <label for="f-urgency">紧急程度 <span class="tag-opt">选填</span></label>
+                    <button type="button" class="none-toggle" aria-pressed="true" aria-controls="f-urgency">无此项</button>
+                  </div>
+                  <input id="f-urgency" value="" placeholder="特急 / 加急" disabled />
+                </div>
+                <div class="field is-none">
+                  <div class="field-head">
+                    <label for="f-signers">签发人 <span class="tag-opt">选填</span></label>
+                    <button type="button" class="none-toggle" aria-pressed="true" aria-controls="f-signers">无此项</button>
+                  </div>
+                  <input id="f-signers" value="" placeholder="上行文填写，多人顿号分隔" disabled />
+                </div>
+                <div class="field full">
+                  <div class="field-head">
+                    <label for="f-org">发文机关标志<span class="req">*</span></label>
+                  </div>
+                  <input id="f-org" value="××市人民政府" />
+                </div>
+                <div class="field full">
+                  <div class="field-head">
+                    <label for="f-docno">发文字号<span class="req">*</span></label>
+                  </div>
+                  <input id="f-docno" value="×政发〔2024〕12号" />
+                </div>
+              </div>
+            </div>
+
+            <div class="section">
+              <div class="section-h">
+                <h2><span class="dot"></span>主体</h2>
+                <span class="hint">main</span>
+              </div>
+              <div class="grid-2">
+                <div class="field full">
+                  <div class="field-head">
+                    <label for="f-title">标题<span class="req">*</span></label>
+                  </div>
+                  <textarea id="f-title">关于进一步加强城市精细化管理工作的通知</textarea>
+                </div>
+                <div class="field full">
+                  <div class="field-head">
+                    <label for="f-to">主送机关 <span class="tag-opt">选填</span></label>
+                    <div class="field-actions">
+                      <button type="button" class="mini-toggle" id="f-to-footer" aria-pressed="false">排在版记</button>
+                      <button type="button" class="none-toggle" aria-pressed="false" aria-controls="f-to">无此项</button>
+                    </div>
+                  </div>
+                  <input id="f-to" value="各区县人民政府，市政府各部门、各直属机构：" />
+                </div>
+                <div class="field full">
+                  <div class="field-head">
+                    <label for="f-attach">附件说明 <span class="tag-opt">选填</span></label>
+                    <button type="button" class="none-toggle" aria-pressed="false" aria-controls="f-attach">无此项</button>
+                  </div>
+                  <input id="f-attach" value="城市精细化管理重点任务清单" />
+                  <span class="hint">正文下附件说明行；不做附件另面</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="section">
+              <div class="section-h">
+                <h2><span class="dot"></span>落款与版记</h2>
+                <span class="hint">footer + LayoutIR</span>
+              </div>
+              <div class="grid-2">
+                <div class="field">
+                  <div class="field-head">
+                    <label for="f-orgsig">发文机关署名<span class="req">*</span></label>
+                  </div>
+                  <input id="f-orgsig" value="××市人民政府" />
+                </div>
+                <div class="field">
+                  <div class="field-head">
+                    <label for="f-date">成文日期<span class="req">*</span></label>
+                  </div>
+                  <input id="f-date" value="2024年3月15日" />
+                </div>
+                <div class="field is-none">
+                  <div class="field-head">
+                    <label for="f-note">附注 <span class="tag-opt">选填</span></label>
+                    <button type="button" class="none-toggle" aria-pressed="true" aria-controls="f-note">无此项</button>
+                  </div>
+                  <input id="f-note" value="" placeholder="（此件公开发布）" disabled />
+                </div>
+                <div class="field is-none">
+                  <div class="field-head">
+                    <label for="f-cc">抄送 <span class="tag-opt">选填</span></label>
+                    <button type="button" class="none-toggle" aria-pressed="true" aria-controls="f-cc">无此项</button>
+                  </div>
+                  <input id="f-cc" value="" placeholder="模型不含此字段，需人工填写" disabled />
+                </div>
+                <div class="field">
+                  <div class="field-head">
+                    <label for="f-print-org">印发机关<span class="req">*</span></label>
+                  </div>
+                  <input id="f-print-org" value="××市人民政府办公室" />
+                </div>
+                <div class="field">
+                  <div class="field-head">
+                    <label for="f-print-date">印发日期<span class="req">*</span></label>
+                  </div>
+                  <input id="f-print-date" value="2024年3月16日" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="pane">
+            <div class="side-card">
+              <h3>必填检查 <span class="status-pill" id="req-status">待确认</span></h3>
+              <ul id="req-list">
+                <li data-req="org_mark"><span class="mark">○</span><span class="lab">发文机关标志</span><span class="hint-mini"></span></li>
+                <li data-req="doc_number"><span class="mark">○</span><span class="lab">发文字号</span><span class="hint-mini"></span></li>
+                <li data-req="title"><span class="mark">○</span><span class="lab">标题</span><span class="hint-mini"></span></li>
+                <li data-req="body"><span class="mark">○</span><span class="lab">正文</span><span class="hint-mini"></span></li>
+                <li data-req="org_signature"><span class="mark">○</span><span class="lab">发文机关署名</span><span class="hint-mini"></span></li>
+                <li data-req="date"><span class="mark">○</span><span class="lab">成文日期</span><span class="hint-mini"></span></li>
+                <li data-req="print"><span class="mark">○</span><span class="lab">印发机关 / 印发日期</span><span class="hint-mini"></span></li>
+                <li data-req="seal_mode"><span class="mark">○</span><span class="lab">落款版式</span><span class="hint-mini"></span></li>
+              </ul>
+            </div>
+            <div class="side-card">
+              <h3>版式推断 <span class="hint" id="layout-infer-note"></span></h3>
+              <ul id="layout-infer">
+                <li id="infer-dir">—</li>
+                <li id="infer-org">—</li>
+                <li id="infer-to">—</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- STEP 3 -->
+        <section class="view" data-view="3">
+          <div class="pane">
+            <div class="pane-head">
+              <div>
+                <h1>正文结构</h1>
+                <p>按国标四层自动切分；失败则整段仿宋正文。左侧改层级，右侧「⋯」可移动或删除该段。</p>
+              </div>
+              <div class="toolbar">
+                <span class="chip ok">已识别层次</span>
+              </div>
+            </div>
+
+            <div class="struct-toolbar" role="toolbar" aria-label="结构工具">
+              <button class="btn" type="button" data-level="h1">一级 一、</button>
+              <button class="btn" type="button" data-level="h2">二级 （一）</button>
+              <button class="btn" type="button" data-level="h3">三级 1.</button>
+              <button class="btn" type="button" data-level="h4">四级 （1）</button>
+              <button class="btn" type="button" data-level="p">正文</button>
+              <button class="btn ghost" type="button" id="btn-renumber" title="按同级顺序重排：一、二、三… / （一）（二）… / 1. 2. …">重排编号</button>
+            </div>
+
+            <div class="body-editor" id="body-editor" aria-label="正文结构编辑区">
+              <div class="block selected" data-level="p">
+                <span class="tag p">正文</span>
+                <div class="block-text p" contenteditable="true">为进一步提升城市治理水平，现就有关事项通知如下：</div>
+                <div class="block-actions">
+                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                  <div class="more-menu" role="menu">
+                    <button type="button" data-act="up" role="menuitem">上移</button>
+                    <button type="button" data-act="down" role="menuitem">下移</button>
+                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
+                  </div>
+                </div>
+              </div>
+              <div class="block" data-level="h1">
+                <span class="tag h1">一级</span>
+                <div class="block-text h1" contenteditable="true">一、总体要求</div>
+                <div class="block-actions">
+                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                  <div class="more-menu" role="menu">
+                    <button type="button" data-act="up" role="menuitem">上移</button>
+                    <button type="button" data-act="down" role="menuitem">下移</button>
+                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
+                  </div>
+                </div>
+              </div>
+              <div class="block" data-level="p">
+                <span class="tag p">正文</span>
+                <div class="block-text p" contenteditable="true">坚持人民城市人民建、人民城市为人民，推动治理精细化、标准化、常态化。</div>
+                <div class="block-actions">
+                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                  <div class="more-menu" role="menu">
+                    <button type="button" data-act="up" role="menuitem">上移</button>
+                    <button type="button" data-act="down" role="menuitem">下移</button>
+                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
+                  </div>
+                </div>
+              </div>
+              <div class="block" data-level="h1">
+                <span class="tag h1">一级</span>
+                <div class="block-text h1" contenteditable="true">二、重点任务</div>
+                <div class="block-actions">
+                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                  <div class="more-menu" role="menu">
+                    <button type="button" data-act="up" role="menuitem">上移</button>
+                    <button type="button" data-act="down" role="menuitem">下移</button>
+                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
+                  </div>
+                </div>
+              </div>
+              <div class="block" data-level="h2">
+                <span class="tag h2">二级</span>
+                <div class="block-text h2" contenteditable="true">（一）市容环境整治</div>
+                <div class="block-actions">
+                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                  <div class="more-menu" role="menu">
+                    <button type="button" data-act="up" role="menuitem">上移</button>
+                    <button type="button" data-act="down" role="menuitem">下移</button>
+                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
+                  </div>
+                </div>
+              </div>
+              <div class="block" data-level="h3">
+                <span class="tag h3">三级</span>
+                <div class="block-text h3" contenteditable="true">1. 加强背街小巷卫生长效管理，落实责任到人。</div>
+                <div class="block-actions">
+                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                  <div class="more-menu" role="menu">
+                    <button type="button" data-act="up" role="menuitem">上移</button>
+                    <button type="button" data-act="down" role="menuitem">下移</button>
+                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
+                  </div>
+                </div>
+              </div>
+              <div class="block" data-level="h3">
+                <span class="tag h3">三级</span>
+                <div class="block-text h3" contenteditable="true">2. 规范占道经营清理标准，建立投诉闭环机制。</div>
+                <div class="block-actions">
+                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                  <div class="more-menu" role="menu">
+                    <button type="button" data-act="up" role="menuitem">上移</button>
+                    <button type="button" data-act="down" role="menuitem">下移</button>
+                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
+                  </div>
+                </div>
+              </div>
+              <div class="block" data-level="h2">
+                <span class="tag h2">二级</span>
+                <div class="block-text h2" contenteditable="true">（二）市政设施运维</div>
+                <div class="block-actions">
+                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                  <div class="more-menu" role="menu">
+                    <button type="button" data-act="up" role="menuitem">上移</button>
+                    <button type="button" data-act="down" role="menuitem">下移</button>
+                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
+                  </div>
+                </div>
+              </div>
+              <div class="block" data-level="h1">
+                <span class="tag h1">一级</span>
+                <div class="block-text h1" contenteditable="true">三、组织保障</div>
+                <div class="block-actions">
+                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                  <div class="more-menu" role="menu">
+                    <button type="button" data-act="up" role="menuitem">上移</button>
+                    <button type="button" data-act="down" role="menuitem">下移</button>
+                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
+                  </div>
+                </div>
+              </div>
+              <div class="block" data-level="p">
+                <span class="tag p">正文</span>
+                <div class="block-text p" contenteditable="true">各地各部门要压实责任，及时总结经验，重大问题按程序报告。</div>
+                <div class="block-actions">
+                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                  <div class="more-menu" role="menu">
+                    <button type="button" data-act="up" role="menuitem">上移</button>
+                    <button type="button" data-act="down" role="menuitem">下移</button>
+                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="pane">
+            <div class="side-card">
+              <h3>字体作用范围</h3>
+              <ul>
+                <li>一级：整级黑体</li>
+                <li>二级：整级楷体</li>
+                <li>三级 / 四级：整级仿宋，不加粗</li>
+                <li>正文：3 号仿宋，首行缩进 2 字</li>
+              </ul>
+            </div>
+            <div class="side-card">
+              <h3>轻量工具边界</h3>
+              <ul>
+                <li>可设四级结构；「重排编号」按同级顺序接续</li>
+                <li>行末「⋯」：上移 / 下移 / 删除</li>
+                <li>不做表格、图片、复杂样式</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- STEP 4 -->
+        <section class="view" data-view="4">
+          <div class="pane">
+            <div class="pane-head">
+              <div>
+                <h1>生成导出</h1>
+                <p>按 LayoutIR 生成符合国标数值的 docx。预览仅为示意比例，最终以 WPS 打开验收为准。</p>
+              </div>
+            </div>
+
+            <div class="alert" id="export-alert" style="display:none">
+              <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-8,56a8,8,0,0,1,16,0v40a8,8,0,0,1-16,0Zm8,88a12,12,0,1,1,12-12A12,12,0,0,1,128,184Z"/></svg>
+              <div id="export-alert-text">尚有阻断项，无法导出。</div>
+            </div>
+
+            <div class="export-actions">
+              <div class="path-box">
+                <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM40,56H216V88H40ZM40,200V104H216v96Z"/></svg>
+                <code id="out-path">E:\Documents\×政发〔2024〕12号.docx</code>
+                <button class="btn" type="button" id="btn-browse">更改…</button>
+              </div>
+              <div class="toolbar">
+                <button class="btn accent" type="button" id="btn-export">
+                  <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0ZM93.66,77.66,120,51.31V144a8,8,0,0,0,16,0V51.31l26.34,26.35a8,8,0,0,0,11.32-11.32l-40-40a8,8,0,0,0-11.32,0l-40,40A8,8,0,0,0,93.66,77.66Z"/></svg>
+                  生成 docx
+                </button>
+                <button class="btn" type="button" id="btn-wps" disabled>
+                  <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40Zm0,160H40V56H216V200ZM176,88a8,8,0,0,1-8,8H88a8,8,0,0,1,0-16h80A8,8,0,0,1,176,88Zm0,40a8,8,0,0,1-8,8H88a8,8,0,0,1,0-16h80A8,8,0,0,1,176,128Zm-32,40a8,8,0,0,1-8,8H88a8,8,0,0,1,0-16h48A8,8,0,0,1,144,168Z"/></svg>
+                  用 WPS 打开
+                </button>
+              </div>
+              <div class="meta-row">
+                <span class="chip" id="seal-chip">版式：未选择</span>
+                <span class="chip">网格 22×28</span>
+                <span class="chip">红头距版心顶 35mm</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="pane">
+            <div class="doc-sheet" aria-hidden="true">
+              <div class="doc-org" id="preview-org">××市人民政府</div>
+              <div class="doc-no" id="preview-no">×政发〔2024〕12号</div>
+              <div class="doc-line"></div>
+              <div class="doc-title" id="preview-title">关于进一步加强城市精细化管理工作的通知</div>
+              <div class="doc-to" id="preview-to">各区县人民政府，市政府各部门、各直属机构：</div>
+              <div class="doc-body">为进一步提升城市治理水平，现就有关事项通知如下：一、总体要求……（示意）</div>
+              <div class="doc-sign">
+                <div id="preview-sig">××市人民政府</div>
+                <div id="preview-date">2024年3月15日</div>
+              </div>
+              <div class="doc-footer">
+                <span id="preview-print-org">××市人民政府办公室</span>
+                <span id="preview-print-date">2024年3月16日印发</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="footerbar">
+        <div class="footer-left">
+          <span id="step-label">步骤 1 / 4 · 导入文稿</span>
+          <span>·</span>
+          <span id="recognizer-label">识别：连接中…</span>
+        </div>
+        <div class="footer-right">
+          <button class="btn" type="button" id="btn-back" disabled>上一步</button>
+          <button class="btn primary" type="button" id="btn-next">开始识别</button>
+        </div>
+      </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const SAMPLE = `××市人民政府文件
+
+×政发〔2024〕12号
+
+关于进一步加强城市精细化管理工作的通知
+
+各区县人民政府，市政府各部门、各直属机构：
+
+为进一步提升城市治理水平，现就有关事项通知如下：
+
+一、总体要求
+坚持人民城市人民建、人民城市为人民，推动治理精细化、标准化、常态化。
+
+二、重点任务
+（一）市容环境整治
+1. 加强背街小巷卫生长效管理，落实责任到人。
+2. 规范占道经营清理标准，建立投诉闭环机制。
+（二）市政设施运维
+完善巡查养护机制，提高设施完好率。
+
+三、组织保障
+各地各部门要压实责任，及时总结经验，重大问题按程序报告。
+
+附件：城市精细化管理重点任务清单
+
+××市人民政府
+2024年3月15日
+
+××市人民政府办公室　　　　　　2024年3月16日印发`;
+
+    const labels = ["导入文稿", "确认要素", "正文结构", "生成导出"];
+    const nextLabels = ["开始识别", "下一步", "下一步", "生成 docx"];
+    let step = 1;
+    let sealMode = null;
+    let selectedBlock = document.querySelector(".block.selected");
+
+    const rawText = document.getElementById("raw-text");
+    const charCount = document.getElementById("char-count");
+    const toast = document.getElementById("toast");
+    const btnBack = document.getElementById("btn-back");
+    const btnNext = document.getElementById("btn-next");
+    const stepLabel = document.getElementById("step-label");
+    const reqStatus = document.getElementById("req-status");
+    const sealChip = document.getElementById("seal-chip");
+    const exportAlert = document.getElementById("export-alert");
+    const btnWps = document.getElementById("btn-wps");
+
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add("show");
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => toast.classList.remove("show"), 2200);
+    }
+
+    function updateCharCount() {
+      const n = [...rawText.value].length;
+      charCount.textContent = n + " 字";
+    }
+
+    function setStep(n) {
+      step = Math.max(1, Math.min(4, n));
+      document.querySelectorAll(".step").forEach((el) => {
+        const s = Number(el.dataset.step);
+        el.classList.toggle("active", s === step);
+        el.classList.toggle("done", s < step);
+      });
+      document.querySelectorAll(".view").forEach((el) => {
+        el.classList.toggle("active", Number(el.dataset.view) === step);
+      });
+      stepLabel.textContent = `步骤 ${step} / 4 · ${labels[step - 1]}`;
+      btnBack.disabled = step === 1;
+      btnNext.textContent = nextLabels[step - 1];
+      if (step === 2 || step === 4) refreshExportGate();
+      if (step === 3) refreshRequiredChecklist();
+      syncPreview();
+    }
+
+    function syncPreview() {
+      const map = [
+        ["f-org", "preview-org"],
+        ["f-docno", "preview-no"],
+        ["f-title", "preview-title"],
+        ["f-to", "preview-to"],
+        ["f-orgsig", "preview-sig"],
+        ["f-date", "preview-date"],
+        ["f-print-org", "preview-print-org"],
+      ];
+      map.forEach(([src, dst]) => {
+        const a = document.getElementById(src);
+        const b = document.getElementById(dst);
+        if (a && b) b.textContent = a.value || "—";
+      });
+      const pd = document.getElementById("f-print-date");
+      const pdv = document.getElementById("preview-print-date");
+      if (pd && pdv) pdv.textContent = (pd.value || "—") + "印发";
+    }
+
+    function fieldVal(id) {
+      const el = document.getElementById(id);
+      if (!el || el.disabled) return "";
+      return (el.value || "").trim();
+    }
+
+    function bodyHasText() {
+      return [...document.querySelectorAll("#body-editor .block-text")]
+        .some((el) => (el.textContent || "").trim().length > 0);
+    }
+
+    function requiredState() {
+      return {
+        org_mark: !!fieldVal("f-org"),
+        doc_number: !!fieldVal("f-docno"),
+        title: !!fieldVal("f-title"),
+        body: bodyHasText(),
+        org_signature: !!fieldVal("f-orgsig"),
+        date: !!fieldVal("f-date"),
+        print: !!(fieldVal("f-print-org") && fieldVal("f-print-date")),
+        seal_mode: !!sealMode,
+      };
+    }
+
+    function setReqItem(key, ok, emptyHint) {
+      const li = document.querySelector(`#req-list li[data-req="${key}"]`);
+      if (!li) return;
+      const mark = li.querySelector(".mark");
+      const hint = li.querySelector(".hint-mini");
+      li.classList.toggle("is-ok", ok);
+      li.classList.toggle("is-missing", !ok);
+      if (mark) mark.textContent = ok ? "✓" : "!";
+      if (hint) hint.textContent = ok ? "已填" : (emptyHint || "未填");
+    }
+
+    function refreshRequiredChecklist() {
+      const st = requiredState();
+      setReqItem("org_mark", st.org_mark);
+      setReqItem("doc_number", st.doc_number);
+      setReqItem("title", st.title);
+      setReqItem("body", st.body, "请到正文结构确认");
+      setReqItem("org_signature", st.org_signature);
+      setReqItem("date", st.date);
+      setReqItem("print", st.print, "机关或日期空");
+      setReqItem("seal_mode", st.seal_mode, "未选择");
+
+      const missing = Object.values(st).filter((v) => !v).length;
+      if (missing === 0) {
+        reqStatus.textContent = "可导出";
+        reqStatus.classList.add("ok");
+      } else {
+        reqStatus.textContent = `缺 ${missing} 项`;
+        reqStatus.classList.remove("ok");
+      }
+
+      // 版式推断也跟着变
+      const signers = fieldVal("f-signers");
+      const org = fieldVal("f-org");
+      const toFooter = document.getElementById("f-to-footer")?.getAttribute("aria-pressed") === "true";
+      const inferDir = document.getElementById("infer-dir");
+      const inferOrg = document.getElementById("infer-org");
+      const inferTo = document.getElementById("infer-to");
+      if (inferDir) inferDir.textContent = signers ? "有签发人 → 上行文版式" : "签发人为空 → 按下行文处理";
+      if (inferOrg) {
+        const parts = org.split(/[、，,；;]/).map((s) => s.trim()).filter(Boolean);
+        inferOrg.textContent = parts.length > 1 ? `联合红头（${parts.length} 个机关）` : (org ? "单一机关红头" : "尚未填写发文机关标志");
+      }
+      if (inferTo) {
+        const rec = fieldVal("f-to");
+        if (!rec) inferTo.textContent = "主送为空（或已点无此项）";
+        else inferTo.textContent = toFooter ? "主送排在版记" : "主送在标题下";
+      }
+    }
+
+    function refreshExportGate() {
+      refreshRequiredChecklist();
+      const ok = Boolean(sealMode);
+      exportAlert.style.display = ok ? "none" : "flex";
+      document.getElementById("export-alert-text").textContent = ok
+        ? ""
+        : "尚未选择落款版式（seal_mode），无法导出。请返回「确认要素」选择。";
+      sealChip.textContent = sealMode
+        ? (sealMode === "stamp_layout" ? "版式：有章" : "版式：无章")
+        : "版式：未选择";
+    }
+
+    document.querySelectorAll(".step").forEach((el) => {
+      el.addEventListener("click", () => setStep(Number(el.dataset.step)));
+    });
+
+    btnBack.addEventListener("click", () => setStep(step - 1));
+
+    let backend = null;
+
+    function setFieldValue(id, value, preferNoneIfEmpty = true) {
+      const input = document.getElementById(id);
+      if (!input) return;
+      const field = input.closest(".field");
+      const noneBtn = field?.querySelector(".none-toggle");
+      const v = (value || "").trim();
+      if (input.tagName === "TEXTAREA") input.value = v;
+      else input.value = v;
+      if (noneBtn && preferNoneIfEmpty) {
+        const on = !v;
+        noneBtn.setAttribute("aria-pressed", on ? "true" : "false");
+        field?.classList.toggle("is-none", on);
+        input.disabled = on;
+      } else if (noneBtn && v) {
+        noneBtn.setAttribute("aria-pressed", "false");
+        field?.classList.remove("is-none");
+        input.disabled = false;
+      }
+    }
+
+    function applyRecognizeResult(data) {
+      const f = data.fields || {};
+      setFieldValue("f-copy", f.copy_number);
+      setFieldValue("f-secret", f.secret_combo);
+      setFieldValue("f-urgency", f.urgency);
+      setFieldValue("f-signers", f.issuer_sign);
+      setFieldValue("f-org", f.org_mark, false);
+      setFieldValue("f-docno", f.doc_number, false);
+      setFieldValue("f-title", f.title, false);
+      setFieldValue("f-to", f.recipient);
+      setFieldValue("f-attach", f.attachment_caption);
+      setFieldValue("f-orgsig", f.org_signature, false);
+      setFieldValue("f-date", f.date, false);
+      setFieldValue("f-note", f.note);
+      setFieldValue("f-cc", f.cc_recipients);
+      setFieldValue("f-print-org", f.print_org, false);
+      setFieldValue("f-print-date", f.print_date, false);
+      renderBodyTree(data.body_tree || []);
+      syncPreview();
+      refreshRequiredChecklist();
+    }
+
+    function renderBodyTree(tree) {
+      const editor = document.getElementById("body-editor");
+      editor.innerHTML = "";
+      const levelName = { h1: "一级", h2: "二级", h3: "三级", h4: "四级", p: "正文" };
+      (tree.length ? tree : [{ level: "p", text: "" }]).forEach((b, i) => {
+        const level = b.level || "p";
+        const block = document.createElement("div");
+        block.className = "block" + (i === 0 ? " selected" : "");
+        block.dataset.level = level;
+        block.innerHTML = `
+          <span class="tag ${level}">${levelName[level] || "正文"}</span>
+          <div class="block-text ${level}" contenteditable="true"></div>
+          <div class="block-actions">
+            <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+            <div class="more-menu" role="menu">
+              <button type="button" data-act="up" role="menuitem">上移</button>
+              <button type="button" data-act="down" role="menuitem">下移</button>
+              <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
+            </div>
+          </div>`;
+        block.querySelector(".block-text").textContent = b.text || "";
+        editor.appendChild(block);
+      });
+      selectedBlock = editor.querySelector(".block.selected");
+    }
+
+    function collectBodyTree() {
+      return [...document.querySelectorAll("#body-editor .block")].map((block) => ({
+        level: block.dataset.level || "p",
+        text: block.querySelector(".block-text")?.textContent || "",
+        label: "",
+      }));
+    }
+
+    function collectPayload() {
+      const val = (id) => {
+        const el = document.getElementById(id);
+        if (!el || el.disabled) return "";
+        return (el.value || "").trim();
+      };
+      const absent = {};
+      document.querySelectorAll(".none-toggle").forEach((btn) => {
+        const id = btn.getAttribute("aria-controls");
+        if (id) absent[id] = btn.getAttribute("aria-pressed") === "true";
+      });
+      return {
+        seal_mode: sealMode,
+        fields: {
+          copy_number: val("f-copy"),
+          secret_combo: val("f-secret"),
+          urgency: val("f-urgency"),
+          issuer_sign: val("f-signers"),
+          org_mark: val("f-org"),
+          doc_number: val("f-docno"),
+          title: val("f-title"),
+          recipient: val("f-to"),
+          attachment_caption: val("f-attach"),
+          org_signature: val("f-orgsig"),
+          date: val("f-date"),
+          note: val("f-note"),
+          cc_recipients: val("f-cc"),
+          print_org: val("f-print-org"),
+          print_date: val("f-print-date"),
+          recipients_in_footer: document.getElementById("f-to-footer")?.getAttribute("aria-pressed") === "true",
+        },
+        absent_flags: absent,
+        body_tree: collectBodyTree(),
+      };
+    }
+
+    function callBackend(method, ...args) {
+      return new Promise((resolve, reject) => {
+        if (!backend || !backend[method]) {
+          reject(new Error("后端未连接，请用 py main.py 启动"));
+          return;
+        }
+        backend[method](...args, (ret) => {
+          try {
+            resolve(typeof ret === "string" ? JSON.parse(ret) : ret);
+          } catch (e) {
+            reject(e);
+          }
+        });
+      });
+    }
+
+    async function doRecognize() {
+      if (![...rawText.value].length) {
+        showToast("请先粘贴文本或载入样例");
+        return;
+      }
+      btnNext.disabled = true;
+      showToast("正在识别…");
+      try {
+        const data = await callBackend("recognize", rawText.value);
+        if (!data.ok) throw new Error(data.error || "识别失败");
+        applyRecognizeResult(data);
+        document.getElementById("recognizer-label").textContent = "识别：" + (data.recognizer || "").toUpperCase();
+        showToast("识别完成（" + (data.recognizer || "") + "）");
+        setStep(2);
+      } catch (err) {
+        showToast(String(err.message || err));
+      } finally {
+        btnNext.disabled = false;
+      }
+    }
+
+    async function doExport() {
+      if (!sealMode) {
+        showToast("未选择落款版式，无法导出");
+        return;
+      }
+      btnNext.disabled = true;
+      try {
+        const data = await callBackend("exportDocx", JSON.stringify(collectPayload()));
+        if (!data.ok) throw new Error(data.error || "导出失败");
+        document.getElementById("out-path").textContent = data.path;
+        btnWps.disabled = false;
+        showToast("已生成 docx");
+      } catch (err) {
+        showToast(String(err.message || err));
+      } finally {
+        btnNext.disabled = false;
+      }
+    }
+
+    btnNext.addEventListener("click", () => {
+      if (step === 1) { doRecognize(); return; }
+      if (step === 2) {
+        if (!sealMode) {
+          document.getElementById("confirm-alert").classList.add("error");
+          showToast("请先选择有章 / 无章版式");
+          return;
+        }
+        document.getElementById("confirm-alert").classList.remove("error");
+        setStep(3);
+        return;
+      }
+      if (step === 3) { setStep(4); return; }
+      if (step === 4) { doExport(); }
+    });
+
+    document.getElementById("btn-load-sample").addEventListener("click", () => {
+      rawText.value = SAMPLE;
+      updateCharCount();
+      showToast("已载入下行文样例");
+    });
+
+    rawText.addEventListener("input", updateCharCount);
+
+    const dropzone = document.getElementById("dropzone");
+    const fileInput = document.getElementById("file-input");
+    async function pickViaBackend() {
+      try {
+        const data = await callBackend("pickDocx");
+        if (!data.ok) {
+          if (data.error) showToast(data.error);
+          return;
+        }
+        rawText.value = data.text || "";
+        updateCharCount();
+        showToast("已导入 " + (data.path || "docx"));
+      } catch (err) {
+        fileInput.click();
+      }
+    }
+    document.getElementById("btn-pick").addEventListener("click", (e) => {
+      e.stopPropagation();
+      pickViaBackend();
+    });
+    dropzone.addEventListener("click", () => pickViaBackend());
+    dropzone.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickViaBackend(); }
+    });
+    ["dragenter", "dragover"].forEach((ev) => {
+      dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add("drag"); });
+    });
+    ["dragleave", "drop"].forEach((ev) => {
+      dropzone.addEventListener(ev, (e) => {
+        e.preventDefault();
+        dropzone.classList.remove("drag");
+        if (ev === "drop") showToast("请点击「选择文件」导入 docx");
+      });
+    });
+    fileInput.addEventListener("change", () => {
+      showToast("请通过桌面程序的选择文件对话框导入");
+      fileInput.value = "";
+    });
+
+    document.querySelectorAll(".seal-option").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        sealMode = btn.dataset.seal;
+        document.querySelectorAll(".seal-option").forEach((b) => {
+          const on = b === btn;
+          b.classList.toggle("selected", on);
+          b.setAttribute("aria-checked", on ? "true" : "false");
+        });
+        document.getElementById("confirm-alert").classList.remove("error");
+        refreshExportGate();
+        showToast(sealMode === "stamp_layout" ? "已选：有章版式" : "已选：无章版式");
+      });
+    });
+
+    document.querySelectorAll(".none-toggle").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const on = btn.getAttribute("aria-pressed") !== "true";
+        btn.setAttribute("aria-pressed", on ? "true" : "false");
+        const field = btn.closest(".field");
+        const input = document.getElementById(btn.getAttribute("aria-controls"));
+        field?.classList.toggle("is-none", on);
+        if (input) {
+          input.disabled = on;
+          if (on) input.blur();
+          else input.focus();
+        }
+        refreshRequiredChecklist();
+      });
+    });
+
+    document.getElementById("f-to-footer")?.addEventListener("click", (e) => {
+      const btn = e.currentTarget;
+      const on = btn.getAttribute("aria-pressed") !== "true";
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+      refreshRequiredChecklist();
+    });
+
+    ["f-org", "f-docno", "f-title", "f-orgsig", "f-date", "f-print-org", "f-print-date", "f-signers", "f-to"].forEach((id) => {
+      document.getElementById(id)?.addEventListener("input", () => {
+        refreshRequiredChecklist();
+        syncPreview();
+      });
+    });
+    document.getElementById("body-editor")?.addEventListener("input", () => refreshRequiredChecklist());
+
+    const bodyEditor = document.getElementById("body-editor");
+    const CN = "一二三四五六七八九十";
+
+    function closeAllMenus() {
+      bodyEditor.querySelectorAll(".block-actions.open").forEach((el) => {
+        el.classList.remove("open");
+        el.querySelector(".more-btn")?.setAttribute("aria-expanded", "false");
+      });
+    }
+
+    function stripMarker(text, level) {
+      if (level === "h1") return text.replace(/^[一二三四五六七八九十]+[、．.]\s*/, "");
+      if (level === "h2") return text.replace(/^（[一二三四五六七八九十]+）\s*/, "");
+      if (level === "h3") return text.replace(/^\d+[．.、]\s*/, "");
+      if (level === "h4") return text.replace(/^（\d+）\s*/, "");
+      return text;
+    }
+
+    function applyMarker(rest, level, index) {
+      if (level === "h1") return `${CN[index]}、${rest}`;
+      if (level === "h2") return `（${CN[index]}）${rest}`;
+      if (level === "h3") return `${index + 1}. ${rest}`;
+      if (level === "h4") return `（${index + 1}）${rest}`;
+      return rest;
+    }
+
+    function renumberBlocks() {
+      const counters = { h1: 0, h2: 0, h3: 0, h4: 0 };
+      bodyEditor.querySelectorAll(".block").forEach((block) => {
+        const level = block.dataset.level;
+        const textEl = block.querySelector(".block-text");
+        if (!textEl || level === "p" || counters[level] === undefined) return;
+        const rest = stripMarker(textEl.textContent.trim(), level);
+        textEl.textContent = applyMarker(rest, level, counters[level]);
+        counters[level] += 1;
+        if (level === "h1") { counters.h2 = counters.h3 = counters.h4 = 0; }
+        if (level === "h2") { counters.h3 = counters.h4 = 0; }
+        if (level === "h3") { counters.h4 = 0; }
+      });
+    }
+
+    bodyEditor.addEventListener("click", (e) => {
+      const moreBtn = e.target.closest(".more-btn");
+      if (moreBtn) {
+        e.stopPropagation();
+        const wrap = moreBtn.closest(".block-actions");
+        const willOpen = !wrap.classList.contains("open");
+        closeAllMenus();
+        if (willOpen) {
+          wrap.classList.add("open");
+          moreBtn.setAttribute("aria-expanded", "true");
+        }
+        const block = moreBtn.closest(".block");
+        document.querySelectorAll(".block").forEach((b) => b.classList.remove("selected"));
+        block.classList.add("selected");
+        selectedBlock = block;
+        return;
+      }
+
+      const actBtn = e.target.closest(".more-menu [data-act]");
+      if (actBtn) {
+        e.stopPropagation();
+        const block = actBtn.closest(".block");
+        const act = actBtn.dataset.act;
+        closeAllMenus();
+        if (act === "up" && block.previousElementSibling) {
+          block.parentNode.insertBefore(block, block.previousElementSibling);
+          showToast("已上移");
+        } else if (act === "down" && block.nextElementSibling) {
+          block.parentNode.insertBefore(block.nextElementSibling, block);
+          showToast("已下移");
+        } else if (act === "delete") {
+          if (bodyEditor.querySelectorAll(".block").length <= 1) {
+            showToast("至少保留一段");
+            return;
+          }
+          const next = block.nextElementSibling || block.previousElementSibling;
+          block.remove();
+          selectedBlock = next;
+          next?.classList.add("selected");
+          showToast("已删除");
+        }
+        return;
+      }
+
+      const block = e.target.closest(".block");
+      if (!block) return;
+      closeAllMenus();
+      document.querySelectorAll(".block").forEach((b) => b.classList.remove("selected"));
+      block.classList.add("selected");
+      selectedBlock = block;
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".block-actions")) closeAllMenus();
+    });
+
+    document.querySelectorAll(".struct-toolbar [data-level]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (!selectedBlock) return;
+        const level = btn.dataset.level;
+        selectedBlock.dataset.level = level;
+        const tag = selectedBlock.querySelector(".tag");
+        const text = selectedBlock.querySelector(".block-text");
+        tag.className = "tag " + level;
+        tag.textContent = ({ h1: "一级", h2: "二级", h3: "三级", h4: "四级", p: "正文" })[level];
+        text.className = "block-text " + level;
+        showToast("已设为 " + tag.textContent);
+      });
+    });
+
+    document.getElementById("btn-renumber").addEventListener("click", () => {
+      renumberBlocks();
+      showToast("已按同级顺序重排编号");
+    });
+
+    document.getElementById("btn-export").addEventListener("click", () => {
+      doExport();
+    });
+
+    document.getElementById("btn-wps").addEventListener("click", async () => {
+      try {
+        const data = await callBackend("openLastExport");
+        if (!data.ok) throw new Error(data.error || "打开失败");
+      } catch (err) {
+        showToast(String(err.message || err));
+      }
+    });
+
+    document.getElementById("btn-browse").addEventListener("click", () => {
+      doExport();
+    });
+
+    function connectBackend() {
+      if (typeof qt === "undefined" || !qt.webChannelTransport) {
+        document.getElementById("app-sub").textContent = "浏览器预览模式 · 后端未连接（请运行 py main.py）";
+        document.getElementById("recognizer-label").textContent = "识别：未连接";
+        return;
+      }
+      new QWebChannel(qt.webChannelTransport, (channel) => {
+        backend = channel.objects.backend;
+        backend.getAppInfo((raw) => {
+          try {
+            const info = JSON.parse(raw);
+            document.getElementById("app-sub").textContent =
+              `本地离线 · 识别器 ${String(info.recognizer || "").toUpperCase()} · GB/T 9704-2012`;
+            document.getElementById("recognizer-label").textContent =
+              "识别：" + String(info.recognizer || "").toUpperCase();
+          } catch (_) {
+            document.getElementById("app-sub").textContent = "本地离线 · 后端已连接";
+          }
+        });
+      });
+    }
+
+    updateCharCount();
+    refreshExportGate();
+    setStep(1);
+    connectBackend();
+  </script>
+</body>
+</html>

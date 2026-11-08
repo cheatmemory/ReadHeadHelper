@@ -1,0 +1,36 @@
+# 公文排版助手默认配置
+app:
+  name: 公文排版助手
+  offline: true
+
+model:
+  # false 时强制 Mock；true 时优先加载 ONNX，失败则回退 Mock
+  enabled: true
+  onnx_path: third_party/govdoc-sdk/model.onnx
+  vocab_path: third_party/govdoc-sdk/vocab.txt
+  position_prob: 0.5
+
+fonts:
+  xiaobiaosong: 方正小标宋简体
+  heiti: 黑体
+  kaiti: 楷体_GB2312
+  fangsong: 仿宋_GB2312
+  songti: 宋体
+
+layout:
+  page:
+    width_mm: 210
+    height_mm: 297
+    top_mm: 37
+    left_mm: 28
+    right_mm: 26
+    bottom_mm: 35
+  grid:
+    rows: 22
+    cols: 28
+  red_header_from_body_top_mm: 35
+  red_line_below_docno_mm: 4
+  red_line_pt: 2
+
+wps:
+  soft_dependency: true

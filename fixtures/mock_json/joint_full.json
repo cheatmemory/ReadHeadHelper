@@ -1,0 +1,29 @@
+{
+  "header": {
+    "copy_number": "000001",
+    "secret_level": "机密",
+    "secret_period": "10年",
+    "urgency": "加急",
+    "issuer_sign": "",
+    "org_mark": "××市人民政府、××市委员会",
+    "doc_number": "×政发〔2024〕1号"
+  },
+  "main": {
+    "title": "关于联合推进重点项目建设的通知",
+    "recipient": "各有关单位：",
+    "body_blocks": [
+      "现将有关事项通知如下：",
+      "一、工作目标",
+      "二、职责分工"
+    ],
+    "attachment_caption": "重点项目清单"
+  },
+  "footer": {
+    "date": "2024年1月10日",
+    "note": "此件公开发布",
+    "attachment": "",
+    "org_signature": "××市人民政府",
+    "print_org": "××市人民政府办公室",
+    "print_date": "2024年1月11日"
+  }
+}
