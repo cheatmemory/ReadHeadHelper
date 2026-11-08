@@ -431,34 +431,69 @@ class DocxEngine:
         _set_run_font(run, name=self.fonts["fangsong"], size_pt=U.PT_3)
 
     def _write_banji(self, doc: Document, ir: LayoutIR):
-        # 版记分隔线（粗）
-        def banji_line(thick: bool):
-            p = doc.add_paragraph()
-            _set_paragraph_spacing(p, line_pt=self.line_pt * 0.6)
-            pPr = p._p.get_or_add_pPr()
+        """版记：整体沉底贴版心下边缘；末条用底边框，避免线下再留空行。"""
+        banji_paras: list = []
+        row_pt = U.PT_4 * 1.3  # 4 号行高，略紧凑
+
+        def _p_border(paragraph, *, top_sz: int | None = None, bottom_sz: int | None = None):
+            pPr = paragraph._p.get_or_add_pPr()
+            old = pPr.find(qn("w:pBdr"))
+            if old is not None:
+                pPr.remove(old)
             pBdr = OxmlElement("w:pBdr")
-            top = OxmlElement("w:top")
-            # 0.35mm ≈ 1pt；0.25mm ≈ 0.7pt → sz 单位 1/8 pt
-            sz = 8 if thick else 6
-            top.set(qn("w:val"), "single")
-            top.set(qn("w:sz"), str(sz))
-            top.set(qn("w:space"), "1")
-            top.set(qn("w:color"), "000000")
-            pBdr.append(top)
+            for edge, sz in (("top", top_sz), ("bottom", bottom_sz)):
+                if sz is None:
+                    continue
+                el = OxmlElement(f"w:{edge}")
+                el.set(qn("w:val"), "single")
+                el.set(qn("w:sz"), str(sz))
+                el.set(qn("w:space"), "0")
+                el.set(qn("w:color"), "000000")
+                pBdr.append(el)
             pPr.append(pBdr)
+
+        def _banji_para(*, line_pt: float | None = None):
+            p = doc.add_paragraph()
+            _set_paragraph_spacing(p, before_pt=0, after_pt=0, line_pt=line_pt or row_pt)
+            _disable_snap_to_grid(p)
+            # 左右各空一字（抄送/印发国标）；首条线仍全宽靠边框画在版心宽上
+            banji_paras.append(p)
             return p
 
-        banji_line(True)
+        def _pin_banji_to_body_bottom(paragraphs: list) -> None:
+            """连续相同 framePr → Word 合成一块，贴版心下沿（§7.4.1）。"""
+            width_twips = U.mm_to_twips(U.PAGE["body_width_mm"])
+            for p in paragraphs:
+                pPr = p._p.get_or_add_pPr()
+                for old in pPr.findall(qn("w:framePr")):
+                    pPr.remove(old)
+                frame = OxmlElement("w:framePr")
+                frame.set(qn("w:w"), str(width_twips))
+                frame.set(qn("w:wrap"), "notBeside")
+                frame.set(qn("w:vAnchor"), "margin")
+                frame.set(qn("w:hAnchor"), "margin")
+                frame.set(qn("w:xAlign"), "left")
+                frame.set(qn("w:yAlign"), "bottom")
+                pPr.insert(0, frame)
+
+        # 首条粗线：空段顶边框（线在段顶，段高尽量小）
+        p0 = _banji_para(line_pt=2)
+        _p_border(p0, top_sz=U.BANJI_LINE_THICK_SZ)
+        p0.add_run("")
+
+        need_mid_before_print = False
         if ir.recipients_in_footer and ir.recipient:
-            p = doc.add_paragraph()
-            _set_paragraph_spacing(p, line_pt=self.line_pt * 0.85)
+            p = _banji_para()
+            p.paragraph_format.left_indent = Pt(U.PT_4)
+            p.paragraph_format.right_indent = Pt(U.PT_4)
             run = p.add_run("主送：" + ir.recipient.rstrip("：:"))
             _set_run_font(run, name=self.fonts["fangsong"], size_pt=U.PT_4)
-            banji_line(False)
+            need_mid_before_print = True
 
         if ir.cc_recipients.strip():
-            p = doc.add_paragraph()
-            _set_paragraph_spacing(p, line_pt=self.line_pt * 0.85)
+            p = _banji_para()
+            p.paragraph_format.left_indent = Pt(U.PT_4)
+            p.paragraph_format.right_indent = Pt(U.PT_4)
             cc = ir.cc_recipients.strip()
             if not cc.startswith("抄送"):
                 cc = "抄送：" + cc
@@ -466,16 +501,23 @@ class DocxEngine:
                 cc = cc + "。"
             run = p.add_run(cc)
             _set_run_font(run, name=self.fonts["fangsong"], size_pt=U.PT_4)
-            banji_line(False)
+            need_mid_before_print = True
 
-        p = doc.add_paragraph()
-        _set_paragraph_spacing(p, line_pt=self.line_pt * 0.85)
-        # 印发机关 / 印发日期 左右分列
+        # 印发机关行：其上细分隔线（若有抄送/主送），其下粗线为末条（贴底，无空段）
+        p = _banji_para()
+        if need_mid_before_print:
+            _p_border(p, top_sz=U.BANJI_LINE_THIN_SZ, bottom_sz=U.BANJI_LINE_THICK_SZ)
+        else:
+            _p_border(p, bottom_sz=U.BANJI_LINE_THICK_SZ)
+        # 印发机关左空一字、印发日期右空一字
+        p.paragraph_format.left_indent = Pt(U.PT_4)
+        p.paragraph_format.right_indent = Pt(U.PT_4)
         pPr = p._p.get_or_add_pPr()
         tabs = OxmlElement("w:tabs")
         tab = OxmlElement("w:tab")
         tab.set(qn("w:val"), "right")
-        tab.set(qn("w:pos"), str(U.mm_to_twips(U.PAGE["body_width_mm"])))
+        # 制表位在「版心宽 − 左右各空一字」内右对齐
+        tab.set(qn("w:pos"), str(U.mm_to_twips(U.PAGE["body_width_mm"]) - int(round(U.PT_4 * 20))))
         tabs.append(tab)
         pPr.append(tabs)
         r1 = p.add_run(ir.print_org)
@@ -486,4 +528,5 @@ class DocxEngine:
             print_date = print_date + "印发"
         r2 = p.add_run(print_date)
         _set_run_font(r2, name=self.fonts["fangsong"], size_pt=U.PT_4)
-        banji_line(True)
+
+        _pin_banji_to_body_bottom(banji_paras)

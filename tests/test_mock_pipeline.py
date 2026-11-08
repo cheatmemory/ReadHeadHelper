@@ -42,6 +42,22 @@ def test_margins_in_docx(tmp_path):
     assert abs(int(sec.left_margin) - U.mm_to_emu(28)) <= 300
 
 
+def test_banji_pinned_to_body_bottom(tmp_path):
+    """§7.4.1：版记沉底；末条为底边框（无线下空段）。"""
+    import zipfile
+
+    text = (ROOT / "fixtures" / "sample_text" / "downlink.txt").read_text(encoding="utf-8")
+    model = MockFieldRecognizer().recognize(text)
+    ir = build_layout_ir(model, seal_mode=SealMode.NO_STAMP, source_text=text)
+    out = tmp_path / "banji.docx"
+    DocxEngine().render(ir, out)
+    with zipfile.ZipFile(out) as z:
+        xml = z.read("word/document.xml").decode("utf-8")
+    assert 'w:yAlign="bottom"' in xml
+    assert 'w:vAnchor="margin"' in xml
+    assert "w:framePr" in xml
+
+
 def test_page_numbers_gbt_7_5(tmp_path):
     """§7.5：有 footer、奇偶页、PAGE 域、一字线。"""
     import zipfile

@@ -43,6 +43,11 @@ PAGE_NUMBER_BELOW_BODY_MM = 7.0
 # 一字线（排在页码数字两侧）
 PAGE_NUMBER_DASH = "—"
 
+# 7.4.1 版记分隔线（推荐高度）→ OOXML sz 单位 1/8 pt
+# 0.35mm ≈ 0.99pt → sz≈8；0.25mm ≈ 0.71pt → sz≈6
+BANJI_LINE_THICK_SZ = 8
+BANJI_LINE_THIN_SZ = 6
+
 # 网格
 GRID_ROWS = 22
 GRID_COLS = 28
