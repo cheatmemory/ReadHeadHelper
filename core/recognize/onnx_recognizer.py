@@ -29,6 +29,21 @@ def _first(result: dict, key: str) -> str:
     return _clean(items[0].get("text", ""))
 
 
+def _join_attachment_captions(result: dict) -> str:
+    """合并全部「附件说明」条目（_first 只会丢掉第 2 条起）。"""
+    items = result.get("附件说明") or []
+    parts: list[str] = []
+    for i, it in enumerate(items, 1):
+        t = _clean(str(it.get("text") or ""))
+        if not t:
+            continue
+        t = re.sub(r"^附件\s*[:：]\s*", "", t)
+        if not re.match(r"^\d+\s*[\.．、]", t):
+            t = f"{i}.{t}"
+        parts.append(t)
+    return "\n".join(parts)
+
+
 def _guess_body_blocks(text: str, result: dict) -> list[str]:
     """从原文抽取正文段落（不做层级；层级由 parse_body_blocks 负责）。"""
     return extract_body_paragraphs(
@@ -104,7 +119,7 @@ class OnnxFieldRecognizer:
                 "title": _first(raw, "标题"),
                 "recipient": _first(raw, "主送机关"),
                 "body_blocks": body_blocks,
-                "attachment_caption": _first(raw, "附件说明"),
+                "attachment_caption": _join_attachment_captions(raw),
             },
             "footer": {
                 "date": _first(raw, "成文日期"),

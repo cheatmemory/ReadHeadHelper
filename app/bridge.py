@@ -2,9 +2,11 @@
 """HTML 前端 ↔ Python 后端桥。"""
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Slot, Signal
@@ -53,16 +55,62 @@ class BackendBridge(QObject):
             ensure_ascii=False,
         )
 
+    def _read_docx(self, path: str) -> str:
+        return json.dumps(
+            {"ok": True, "path": path, "text": extract_text_from_docx(path)},
+            ensure_ascii=False,
+        )
+
     @Slot(result=str)
     def pickDocx(self) -> str:
         path, _ = QFileDialog.getOpenFileName(None, "选择公文 docx", "", "Word (*.docx)")
         if not path:
             return json.dumps({"ok": False}, ensure_ascii=False)
         try:
-            text = extract_text_from_docx(path)
+            return self._read_docx(path)
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
-        return json.dumps({"ok": True, "path": path, "text": text}, ensure_ascii=False)
+
+    @Slot(str, result=str)
+    def importDocxPath(self, path: str) -> str:
+        """拖拽等场景：按本机路径抽取 docx 文本。"""
+        path = (path or "").strip().strip('"')
+        if not path:
+            return json.dumps({"ok": False, "error": "空路径"}, ensure_ascii=False)
+        p = Path(path)
+        if not p.is_file() or p.suffix.lower() != ".docx":
+            return json.dumps({"ok": False, "error": "请选择 .docx 文件"}, ensure_ascii=False)
+        try:
+            return self._read_docx(str(p))
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    @Slot(str, str, result=str)
+    def importDocxBase64(self, name: str, b64: str) -> str:
+        """浏览器 DnD 无路径时：用文件内容抽文本。"""
+        name = (name or "drop.docx").strip() or "drop.docx"
+        if not name.lower().endswith(".docx"):
+            return json.dumps({"ok": False, "error": "请拖入 .docx 文件"}, ensure_ascii=False)
+        try:
+            raw = base64.b64decode(b64 or "", validate=False)
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({"ok": False, "error": f"解码失败：{exc}"}, ensure_ascii=False)
+        if not raw:
+            return json.dumps({"ok": False, "error": "空文件"}, ensure_ascii=False)
+        tmp_path = None
+        try:
+            fd, tmp_path = tempfile.mkstemp(prefix="govdoc_", suffix=".docx")
+            os.close(fd)
+            Path(tmp_path).write_bytes(raw)
+            return self._read_docx(tmp_path)
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     @Slot(str, result=str)
     def recognize(self, text: str) -> str:

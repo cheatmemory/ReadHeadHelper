@@ -38,7 +38,7 @@ class StructurePage(QWidget):
         root.addWidget(s)
 
         bar = QHBoxLayout()
-        for level, name in (("h1", "一级 一、"), ("h2", "二级 （一）"), ("h3", "三级 1."), ("h4", "四级 （1）"), ("p", "正文")):
+        for level, name in (("h1", "一级 一、"), ("h2", "二级 （一）"), ("h3", "三级 1."), ("h4", "四级 (1)"), ("p", "正文")):
             btn = QPushButton(name)
             btn.clicked.connect(lambda checked=False, lv=level: self.set_level(lv))
             bar.addWidget(btn)

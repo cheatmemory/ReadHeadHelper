@@ -43,10 +43,11 @@ PAGE_NUMBER_BELOW_BODY_MM = 7.0
 # 一字线（排在页码数字两侧）
 PAGE_NUMBER_DASH = "—"
 
-# 7.4.1 版记分隔线（推荐高度）→ OOXML sz 单位 1/8 pt
-# 0.35mm ≈ 0.99pt → sz≈8；0.25mm ≈ 0.71pt → sz≈6
-BANJI_LINE_THICK_SZ = 8
-BANJI_LINE_THIN_SZ = 6
+# 7.4.1 版记分隔线 → OOXML sz 单位 1/8 pt
+# 推荐 0.35mm/0.25mm；实际渲染上加大反差，避免 WPS 看起来一样粗
+# §7.4.1：首条/末条 0.35mm、中间 0.25mm → OOXML sz = pt×8（1/8 pt）
+BANJI_LINE_THICK_SZ = 8  # 0.35mm ≈ 0.99pt
+BANJI_LINE_THIN_SZ = 6  # 0.25mm ≈ 0.71pt
 
 # 网格
 GRID_ROWS = 22

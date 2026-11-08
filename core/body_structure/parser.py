@@ -14,6 +14,19 @@ _H3 = re.compile(r"^(\d+)[．.、]\s*(.*)$")
 _H4 = re.compile(r"^[（(](\d+)[）)]\s*(.*)$")
 
 
+def normalize_structure_markers(text: str) -> str:
+    """层次序数：二级全角（一）、三级 1.（无空格）、四级 (1)。"""
+    t = text or ""
+    t = re.sub(
+        r"^[（(]([一二三四五六七八九十百]+)[）)]\s*",
+        lambda m: f"（{m.group(1)}）",
+        t,
+    )
+    t = re.sub(r"^(\d+)[．.、]\s*", lambda m: f"{m.group(1)}.", t)
+    t = re.sub(r"^[（(](\d+)[）)]\s*", lambda m: f"({m.group(1)})", t)
+    return t
+
+
 def parse_paragraph(text: str) -> BodyBlock:
     # 去掉全角空格等，避免「　　一、」匹配失败
     t = (text or "").replace("\u3000", " ").strip()
@@ -21,16 +34,16 @@ def parse_paragraph(text: str) -> BodyBlock:
         return BodyBlock(level="p", text="")
     m = _H1.match(t)
     if m:
-        return BodyBlock(level="h1", label=m.group(1) + "、", text=t)
+        return BodyBlock(level="h1", label=m.group(1) + "、", text=normalize_structure_markers(t))
     m = _H2.match(t)
     if m:
-        return BodyBlock(level="h2", label=f"（{m.group(1)}）", text=t)
+        return BodyBlock(level="h2", label=f"（{m.group(1)}）", text=normalize_structure_markers(t))
     m = _H3.match(t)
     if m:
-        return BodyBlock(level="h3", label=f"{m.group(1)}.", text=t)
+        return BodyBlock(level="h3", label=f"{m.group(1)}.", text=normalize_structure_markers(t))
     m = _H4.match(t)
     if m:
-        return BodyBlock(level="h4", label=f"（{m.group(1)}）", text=t)
+        return BodyBlock(level="h4", label=f"({m.group(1)})", text=normalize_structure_markers(t))
     return BodyBlock(level="p", text=t)
 
 
@@ -52,14 +65,15 @@ def _strip_marker(text: str, level: str) -> str:
 
 
 def _mark(rest: str, level: str, index: int) -> str:
+    # 二级全角（一）；三级 1. 序数后不空格；四级 (1)
     if level == "h1":
         return f"{_CN[index]}、{rest}"
     if level == "h2":
         return f"（{_CN[index]}）{rest}"
     if level == "h3":
-        return f"{index + 1}. {rest}"
+        return f"{index + 1}.{rest}"
     if level == "h4":
-        return f"（{index + 1}）{rest}"
+        return f"({index + 1}){rest}"
     return rest
 
 
@@ -73,7 +87,6 @@ def renumber_blocks(blocks: list[BodyBlock]) -> list[BodyBlock]:
             continue
         rest = _strip_marker(b.text, level)
         text = _mark(rest, level, counters[level])
-        label = text[: text.find(rest[0]) + 0] if rest else text
         # 简单 label
         if level == "h1":
             label = f"{_CN[counters[level]]}、"
@@ -82,7 +95,7 @@ def renumber_blocks(blocks: list[BodyBlock]) -> list[BodyBlock]:
         elif level == "h3":
             label = f"{counters[level] + 1}."
         else:
-            label = f"（{counters[level] + 1}）"
+            label = f"({counters[level] + 1})"
         counters[level] += 1
         if level == "h1":
             counters["h2"] = counters["h3"] = counters["h4"] = 0

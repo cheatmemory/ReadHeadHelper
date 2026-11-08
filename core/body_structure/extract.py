@@ -27,11 +27,17 @@ _STRUCT_START = re.compile(
 )
 
 _ATTACH = re.compile(r"^附件\s*[:：]")
+_ATTACH_ANY = re.compile(r"附件\s*[:：]")
 _CC = re.compile(r"^抄送\s*[:：]")
+_CC_ANY = re.compile(r"抄送\s*[:：]")
 _NOTE = re.compile(r"^[（(]\s*此件")
+_NOTE_ANY = re.compile(r"[（(]\s*此件")
 _DATE_LINE = re.compile(r"^\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日\s*$")
+_DATE_ANY = re.compile(r"\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日")
 _PRINT_TAIL = re.compile(r"印发\s*$")
+_PRINT_ANY = re.compile(r".{2,40}印发\s*$", re.M)
 _DOC_NO = re.compile(r"[〔\[]\d{4}[〕\]].*号")
+_RECIP_TAIL = re.compile(r"各[^：:\n]{0,60}[：:]")
 
 
 def _flat(s: str) -> str:
@@ -235,10 +241,63 @@ def _heuristic_end(lines: list[str], start: int) -> int:
     return end
 
 
-def _resolve_window(
+def _find_substr(text: str, needle: str, *, lo: int = 0, hi: int | None = None) -> int | None:
+    """在 text[lo:hi] 找 needle 首次出现；先精确，再去空白匹配。"""
+    if not needle or not text:
+        return None
+    hi = len(text) if hi is None else min(hi, len(text))
+    lo = max(0, lo)
+    if lo >= hi:
+        return None
+    chunk = text[lo:hi]
+    exact = needle
+    i = chunk.find(exact)
+    if i >= 0:
+        return lo + i
+    # 去空白：在原文上滑窗对齐 flat(needle)
+    flat_n = _flat(_norm_punct(needle))
+    if len(flat_n) < 4:
+        return None
+    flat_c = []
+    map_idx = []  # flat 下标 → 原文下标
+    for j, ch in enumerate(chunk):
+        if ch in " \t\u3000\r":
+            continue
+        flat_c.append(ch)
+        map_idx.append(lo + j)
+    flat_s = _flat(_norm_punct("".join(flat_c)))
+    # flat_c 已无空白，再 norm
+    flat_joined = "".join(flat_c)
+    flat_joined = _norm_punct(flat_joined).replace(" ", "")
+    k = flat_joined.find(flat_n)
+    if k < 0:
+        # 用较短前缀
+        prefix = flat_n[: min(12, len(flat_n))]
+        k = flat_joined.find(prefix)
+        if k < 0:
+            return None
+    return map_idx[k] if k < len(map_idx) else None
+
+
+def _skip_colon_ws(text: str, pos: int) -> int:
+    """跳过字段后残留的空白与全角/半角冒号（模型 end 常不含冒号）。"""
+    n = len(text)
+    while pos < n and text[pos] in " \t\u3000":
+        pos += 1
+    if pos < n and text[pos] in "：:":
+        pos += 1
+        while pos < n and text[pos] in " \t\u3000":
+            pos += 1
+    return pos
+
+
+def _after_field(text: str, start: int, field_len: int) -> int:
+    """字段结束后跳过空白与全角/半角冒号。"""
+    return _skip_colon_ws(text, start + field_len)
+
+
+def _resolve_char_window(
     text: str,
-    lines: list[str],
-    line_spans: list[tuple[int, int]],
     *,
     result: dict[str, Any] | None,
     title: str,
@@ -246,68 +305,122 @@ def _resolve_window(
     date: str,
     org_signature: str,
 ) -> tuple[int, int]:
+    """正文窗口按字符偏移，兼容主送与正文粘在同一行。"""
     result = result or {}
-    n = len(lines)
+    n = len(text or "")
     if n == 0:
         return 0, 0
+    header_hi = max(80, min(n, int(n * 0.55) + 40))
 
-    # ---- 1) 模型偏移 ----
-    start = _pick_body_start_by_offsets(line_spans, result)
-    end = _pick_body_end_by_offsets(line_spans, result, start or 0) if start is not None else None
+    # ---- start ----
+    start: int | None = None
+    # 1) 模型偏移：主送 end > 标题 end
+    cand_starts: list[tuple[int, int]] = []
+    for sp in _items_to_spans(result, "主送机关"):
+        if sp.end <= header_hi:
+            cand_starts.append((0, sp.end))
+    for sp in _items_to_spans(result, "标题"):
+        if sp.end <= header_hi:
+            cand_starts.append((1, sp.end))
+    if cand_starts:
+        cand_starts.sort()
+        # 模型主送 end 常不含冒号 → 正文会以单独「：」起头
+        start = _skip_colon_ws(text, cand_starts[0][1])
 
-    # ---- 2) 文首首次文本锚点 ----
-    header_hi = max(8, min(n, int(n * 0.45) + 1))
+    # 2) 文首文本锚点
     if start is None:
-        recip = recipient or _first_text(result, "主送机关")
-        tit = title or _first_text(result, "标题")
-        hit_r = _find_first_line(lines, recip, 0, header_hi) if recip else None
-        hit_t = _find_first_line(lines, tit, 0, header_hi) if tit else None
-        if hit_r is not None:
-            start = hit_r + 1
-        elif hit_t is not None:
-            start = hit_t + 1
-        else:
-            start = _heuristic_start(lines)
-
-    if end is None:
-        # 文末区文本锚点：取最早（最靠前）的落款类行
-        tail_lo = max(start, int(n * 0.4))
-        cand: list[int] = []
-        for key, val in (
-            ("附件说明", ""),
-            ("发文机关署名", org_signature),
-            ("成文日期", date),
-            ("附注", ""),
-            ("抄送机关", ""),
-        ):
-            needle = val or _first_text(result, key)
-            if key == "附件说明":
-                for i in range(tail_lo, n):
-                    if _ATTACH.match(lines[i].strip()):
-                        cand.append(i)
-                        break
-                continue
-            if not needle:
-                continue
-            hit = _find_first_line(lines, needle, tail_lo, n)
+        recip = (recipient or _first_text(result, "主送机关")).strip()
+        tit = (title or _first_text(result, "标题")).strip()
+        if recip:
+            core = recip.rstrip("：:").strip()
+            hit = _find_substr(text, recip, lo=0, hi=header_hi)
+            if hit is None and core:
+                hit = _find_substr(text, core, lo=0, hi=header_hi)
             if hit is not None:
-                cand.append(hit)
-        for i in range(tail_lo, n):
-            s = lines[i].strip()
-            if _CC.match(s) or _NOTE.match(s) or "秘书科" in s or _PRINT_TAIL.search(s):
-                cand.append(i)
-        end = min(cand) if cand else _heuristic_end(lines, start)
+                used = recip if text.startswith(recip, hit) else core
+                # 若命中的是带冒号版本
+                if text.startswith(recip, hit):
+                    start = _after_field(text, hit, len(recip))
+                else:
+                    start = _after_field(text, hit, len(core))
+        if start is None and tit:
+            hit = _find_substr(text, tit, lo=0, hi=header_hi)
+            if hit is not None:
+                start = _after_field(text, hit, len(tit))
 
-    # 校正
+    # 3) 启发式：文首「各…：」
+    if start is None:
+        m = _RECIP_TAIL.search(text[:header_hi])
+        if m:
+            start = m.end()
+
+    if start is None:
+        start = min(20, max(0, n // 10))
+
     start = max(0, min(start, n))
+    start = _skip_colon_ws(text, start)
+
+    # ---- end：起点之后最早的落款/附件类锚点 ----
+    ends: list[int] = []
+    for key in ("附件说明", "发文机关署名", "成文日期", "附注", "抄送机关", "印发机关", "印发日期"):
+        for sp in _items_to_spans(result, key):
+            if sp.start <= start:
+                continue
+            if key == "成文日期" and sp.start < n * 0.35:
+                continue
+            ends.append(sp.start)
+
+    for rx in (_ATTACH_ANY, _CC_ANY, _NOTE_ANY):
+        m = rx.search(text, start)
+        if m:
+            ends.append(m.start())
+
+    needle_date = (date or _first_text(result, "成文日期")).strip()
+    if needle_date:
+        hit = _find_substr(text, needle_date, lo=start, hi=n)
+        if hit is not None and hit > start:
+            ends.append(hit)
+    else:
+        m = _DATE_ANY.search(text, start)
+        # 成文日期多在后半；跳过正文里「到2026年底」类
+        while m:
+            if m.start() >= start + max(30, int((n - start) * 0.25)):
+                # 前后像独立日期行
+                left = text[m.start() - 1] if m.start() > 0 else "\n"
+                right = text[m.end()] if m.end() < n else "\n"
+                if left in "\n\r　 \t" and right in "\n\r　 \t（(":
+                    ends.append(m.start())
+                    break
+            m = _DATE_ANY.search(text, m.end())
+
+    sig = (org_signature or _first_text(result, "发文机关署名")).strip()
+    if sig and len(sig) >= 4:
+        # 取 start 之后、偏后部的署名（避免命中红头）
+        pos = start
+        last = None
+        while True:
+            hit = _find_substr(text, sig, lo=pos, hi=n)
+            if hit is None:
+                break
+            last = hit
+            pos = hit + 1
+        if last is not None and last >= start + max(20, int((n - start) * 0.2)):
+            ends.append(last)
+
+    m = _PRINT_ANY.search(text[start:])
+    if m:
+        ends.append(start + m.start())
+
+    if ends:
+        end = min(ends)
+    else:
+        end = n
+
     end = max(0, min(end, n))
     if end <= start:
-        start = min(_heuristic_start(lines), max(0, n - 3))
-        end = max(start + 1, _heuristic_end(lines, start))
-        if end <= start:
-            start = min(1, n)
-            end = max(start, n - 2)
-
+        # 弱兜底：去掉首尾各一截
+        start = min(start, max(0, n // 8))
+        end = max(start + 1, n - max(10, n // 10))
     return start, end
 
 
@@ -376,41 +489,67 @@ def extract_body_paragraphs(
     org_signature: str = "",
     sdk_result: dict[str, Any] | None = None,
 ) -> list[str]:
-    """标题/主送之后、附件/落款之前 → 正文段落列表。"""
+    """标题/主送之后、附件/落款之前 → 正文段落列表。
+
+    窗口按字符切，避免「主送与正文同一行」时整段正文被丢到窗外。
+    """
     text = text or ""
     if not text.strip():
         return []
 
-    lines, line_spans = _build_line_index(text)
-    start, end = _resolve_window(
+    sdk_result = sdk_result or {}
+    c0, c1 = _resolve_char_window(
         text,
-        lines,
-        line_spans,
         result=sdk_result,
         title=title,
         recipient=recipient,
         date=date,
         org_signature=org_signature,
     )
+    chunk = text[c0:c1]
+    # 切段仍按行；粘连样本通常只有 1～2 行
+    body_lines = [ln.strip() for ln in chunk.splitlines()]
 
-    body_lines = [ln.strip() for ln in lines[start:end]]
-
-    # 主送已单独入 LayoutIR：正文里再出现则丢掉（防模型偏移切在冒号前）
-    recip_flat = _flat(_norm_punct(recipient or _first_text(result or {}, "主送机关")))
-    recip_flat = recip_flat.rstrip("：:")
+    recip_flat = _flat(
+        _norm_punct(recipient or _first_text(sdk_result, "主送机关"))
+    ).rstrip("：:")
 
     filtered: list[str] = []
     for s in body_lines:
         if not s:
             continue
+        # 主送冒号被切进正文窗时的孤儿行
+        if s in ("：", ":"):
+            continue
         if _ATTACH.match(s) or _CC.match(s) or _NOTE.match(s):
             break
+        # 行内残余「附件：…」截断
+        m_att = _ATTACH_ANY.search(s)
+        if m_att and m_att.start() > 0:
+            s = s[: m_att.start()].rstrip()
+            if not s:
+                break
         s_flat = _flat(_norm_punct(s)).rstrip("：:")
         if recip_flat and len(recip_flat) >= 4 and (
-            s_flat == recip_flat or s_flat.startswith(recip_flat) and len(s_flat) <= len(recip_flat) + 1
+            s_flat == recip_flat
+            or (s_flat.startswith(recip_flat) and len(s_flat) <= len(recip_flat) + 1)
         ):
             continue
-        filtered.append(s)
+        # 行首仍粘着主送时，剥掉主送前缀
+        if recip_flat and len(recip_flat) >= 4:
+            flat_s = _flat(_norm_punct(s))
+            if flat_s.startswith(recip_flat):
+                # 按 flat 长度从原文粗剥（允许冒号）
+                core = recipient.strip().rstrip("：:") or recip_flat
+                hit = s.find(core)
+                if hit >= 0:
+                    s = s[hit + len(core) :].lstrip("：: \t\u3000")
+                else:
+                    # 去空白对齐失败则整行丢弃若几乎等于主送
+                    if len(flat_s) <= len(recip_flat) + 2:
+                        continue
+        if s:
+            filtered.append(s)
 
     paras = _merge_soft_wraps(filtered)
     split_out = _split_inline_structures(paras)
@@ -418,6 +557,8 @@ def extract_body_paragraphs(
     if split_out:
         return split_out
 
-    # 最后兜底：不要整篇；尽量返回中间部分按行
-    mid = [ln.strip() for ln in lines[min(2, len(lines)) : max(2, len(lines) - 3)] if ln.strip()]
-    return mid or ([text.strip()] if len(text.strip()) < 80 else mid)
+    # 最后兜底：字符窗本身
+    mid = [ln.strip() for ln in chunk.splitlines() if ln.strip()]
+    if mid:
+        return mid
+    return [chunk.strip()] if chunk.strip() and len(chunk.strip()) < 80 else []

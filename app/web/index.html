@@ -208,6 +208,13 @@
       padding: 28px 20px;
       text-align: center;
       transition: border-color var(--ease), background var(--ease);
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 240px;
+      cursor: pointer;
     }
     .dropzone:hover, .dropzone.drag {
       border-color: var(--red);
@@ -224,13 +231,50 @@
     .dropzone p {
       margin: 0 auto 14px; color: var(--muted); font-size: 13px; max-width: 36ch;
     }
-    .or {
-      display: flex; align-items: center; gap: 12px;
-      margin: 16px 0; color: var(--muted); font-size: 12px;
+
+    /* 导入页：左右栏均分铺满，勿被后面的 .view.active > .pane { display:block } 盖掉 */
+    .main:has(> .view-import.active) {
+      grid-template-columns: 1fr 1fr;
     }
-    .or::before, .or::after {
-      content: ""; flex: 1; height: 1px; background: var(--line);
+    .view-import .pane-import,
+    .view-import.active > .pane {
+      display: flex !important;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
     }
+    .view-import .pane-head p {
+      max-width: none;
+    }
+    .view-import .pane-import-body {
+      flex: 1 1 auto;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      width: 100%;
+      gap: 12px;
+    }
+    .view-import .field-raw {
+      flex: 1 1 auto;
+      display: flex !important;
+      flex-direction: column;
+      min-height: 0;
+      width: 100%;
+      margin: 0;
+      gap: 0;
+      align-content: stretch;
+    }
+    .view-import .field-raw .textarea,
+    .view-import .textarea {
+      flex: 1 1 auto;
+      width: 100%;
+      min-height: 0;
+      height: auto;
+      resize: none;
+      box-sizing: border-box;
+    }
+    .view-import .meta-row { margin-top: 0; flex: 0 0 auto; }
 
     .textarea {
       width: 100%; min-height: 220px; resize: vertical;
@@ -635,13 +679,13 @@
       </nav>
 
       <div class="main">
-        <!-- STEP 1 -->
-        <section class="view active" data-view="1">
-          <div class="pane">
+        <!-- STEP 1：左上传/拖拽，右文本框 -->
+        <section class="view view-import active" data-view="1">
+          <div class="pane pane-import">
             <div class="pane-head">
               <div>
                 <h1>导入文稿</h1>
-                <p>粘贴纯文本，或上传 docx（仅抽取文本）。识别走本地 Mock/ONNX，不上传网络。</p>
+                <p>上传或拖入 docx（只抽纯文本），也可在右侧直接粘贴。</p>
               </div>
               <div class="toolbar">
                 <button class="btn" type="button" id="btn-load-sample">
@@ -650,56 +694,35 @@
                 </button>
               </div>
             </div>
-
-            <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="上传 docx 文件">
-              <div class="icon-wrap" aria-hidden="true">
-                <svg width="24" height="24" viewBox="0 0 256 256" fill="currentColor"><path d="M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0ZM93.66,77.66,120,51.31V144a8,8,0,0,0,16,0V51.31l26.34,26.35a8,8,0,0,0,11.32-11.32l-40-40a8,8,0,0,0-11.32,0l-40,40A8,8,0,0,0,93.66,77.66Z"/></svg>
+            <div class="pane-import-body">
+              <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="上传或拖入 docx 文件">
+                <div class="icon-wrap" aria-hidden="true">
+                  <svg width="24" height="24" viewBox="0 0 256 256" fill="currentColor"><path d="M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0ZM93.66,77.66,120,51.31V144a8,8,0,0,0,16,0V51.31l26.34,26.35a8,8,0,0,0,11.32-11.32l-40-40a8,8,0,0,0-11.32,0l-40,40A8,8,0,0,0,93.66,77.66Z"/></svg>
+                </div>
+                <h2>拖入或选择 Word 文件</h2>
+                <p>支持 .docx，仅抽取纯文本后进入识别。</p>
+                <button class="btn" type="button" id="btn-pick">选择文件</button>
+                <input type="file" id="file-input" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden />
               </div>
-              <h2>拖入或选择 Word 文件</h2>
-              <p>支持 .docx。程序只抽取纯文本，再进入同一识别链路。</p>
-              <button class="btn" type="button" id="btn-pick">选择文件</button>
-              <input type="file" id="file-input" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden />
-            </div>
-
-            <div class="or">或粘贴文本</div>
-
-            <label class="field" for="raw-text">
-              <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">公文原文</span>
-              <textarea class="textarea" id="raw-text" placeholder="在此粘贴公文全文……&#10;&#10;××市人民政府文件&#10;×政发〔2024〕12号&#10;关于……的通知&#10;各区县人民政府……"></textarea>
-            </label>
-
-            <div class="meta-row">
-              <span class="chip" id="char-count">0 字</span>
-              <span class="chip ok">识别器：Mock</span>
-              <span class="chip">ONNX 未启用</span>
+              <div class="meta-row">
+                <span class="chip" id="char-count">0 字</span>
+                <span class="chip ok" id="import-recognizer-chip">识别器：—</span>
+              </div>
             </div>
           </div>
 
-          <div class="pane">
-            <div class="side-card">
-              <h3>流程说明 <span class="status-pill mock">预览</span></h3>
-              <ul>
-                <li>
-                  <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm48-88a8,8,0,0,1-8,8H136v32a8,8,0,0,1-16,0V136H88a8,8,0,0,1,0-16h32V88a8,8,0,0,1,16,0v32h32A8,8,0,0,1,176,128Z"/></svg>
-                  抽取文本后，由 FieldRecognizer 输出结构化 JSON
-                </li>
-                <li>
-                  <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M229.66,77.66l-128,128a8,8,0,0,1-11.32,0l-56-56a8,8,0,0,1,11.32-11.32L96,188.69,218.34,66.34a8,8,0,0,1,11.32,11.32Z"/></svg>
-                  确认页补全 seal_mode、抄送、联合机关等排版字段
-                </li>
-                <li>
-                  <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM40,56H216V88H40ZM40,200V104H216v96Z"/></svg>
-                  DocxEngine 只吃 LayoutIR，按国标生成 docx
-                </li>
-              </ul>
+          <div class="pane pane-import">
+            <div class="pane-head">
+              <div>
+                <h1>粘贴文本</h1>
+                <p>可直接粘贴公文全文；与左侧导入共用同一识别链路。</p>
+              </div>
             </div>
-            <div class="side-card">
-              <h3>验收口径</h3>
-              <ul>
-                <li><svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-8,56a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm8,104a12,12,0,1,1,12-12A12,12,0,0,1,128,184Z"/></svg>不生成印章图形；盖章由用户完成</li>
-                <li><svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-8,56a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm8,104a12,12,0,1,1,12-12A12,12,0,0,1,128,184Z"/></svg>不做 PDF 导出；可用 WPS 打开验收</li>
-                <li><svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-8,56a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm8,104a12,12,0,1,1,12-12A12,12,0,0,1,128,184Z"/></svg>以数值可核对为准，不只「看起来像」</li>
-              </ul>
+            <div class="pane-import-body">
+              <label class="field field-raw" for="raw-text">
+                <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">公文原文</span>
+                <textarea class="textarea" id="raw-text" placeholder="在此粘贴公文全文……&#10;&#10;××市人民政府文件&#10;×政发〔2024〕12号&#10;关于……的通知&#10;各区县人民政府……"></textarea>
+              </label>
             </div>
           </div>
         </section>
@@ -731,11 +754,11 @@
               <div class="seal-group" role="radiogroup" aria-label="落款版式">
                 <button type="button" class="seal-option" data-seal="stamp_layout" role="radio" aria-checked="false">
                   <strong>有章版式</strong>
-                  <span>成文日期右空四字；署名相对日期居中预留章位。</span>
+                  <span>日期右空四字；署名前一行相对日期居中；附件下不空行。</span>
                 </button>
                 <button type="button" class="seal-option" data-seal="no_stamp_layout" role="radio" aria-checked="false">
                   <strong>无章版式</strong>
-                  <span>署名右空二字；日期首字比署名右移二字。</span>
+                  <span>附件下空一行；署名右空二字、日期首字右移二字；日期更长则日期右空二字并加大署名右空。</span>
                 </button>
               </div>
             </div>
@@ -914,7 +937,7 @@
               <button class="btn" type="button" data-level="h3">三级 1.</button>
               <button class="btn" type="button" data-level="h4">四级 （1）</button>
               <button class="btn" type="button" data-level="p">正文</button>
-              <button class="btn ghost" type="button" id="btn-renumber" title="按同级顺序重排：一、二、三… / （一）（二）… / 1. 2. …">重排编号</button>
+              <button class="btn ghost" type="button" id="btn-renumber" title="按同级顺序重排：一、二、三… / （一）（二）… / 1.2. …">重排编号</button>
             </div>
 
             <div class="body-editor" id="body-editor" aria-label="正文结构编辑区">
@@ -980,7 +1003,7 @@
               </div>
               <div class="block" data-level="h3">
                 <span class="tag h3">三级</span>
-                <div class="block-text h3" contenteditable="true">1. 加强背街小巷卫生长效管理，落实责任到人。</div>
+                <div class="block-text h3" contenteditable="true">1.加强背街小巷卫生长效管理，落实责任到人。</div>
                 <div class="block-actions">
                   <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
                   <div class="more-menu" role="menu">
@@ -992,7 +1015,7 @@
               </div>
               <div class="block" data-level="h3">
                 <span class="tag h3">三级</span>
-                <div class="block-text h3" contenteditable="true">2. 规范占道经营清理标准，建立投诉闭环机制。</div>
+                <div class="block-text h3" contenteditable="true">2.规范占道经营清理标准，建立投诉闭环机制。</div>
                 <div class="block-actions">
                   <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
                   <div class="more-menu" role="menu">
@@ -1153,7 +1176,7 @@
 
 二、重点任务
 （一）市容环境整治
-1. 加强背街小巷卫生长效管理，落实责任到人。
+1.加强背街小巷卫生长效管理，落实责任到人。
 2. 规范占道经营清理标准，建立投诉闭环机制。
 （二）市政设施运维
 完善巡查养护机制，提高设施完好率。
@@ -1371,18 +1394,16 @@
       refreshRequiredChecklist();
     }
 
-    function renderBodyTree(tree) {
-      const editor = document.getElementById("body-editor");
-      editor.innerHTML = "";
-      const levelName = { h1: "一级", h2: "二级", h3: "三级", h4: "四级", p: "正文" };
-      (tree.length ? tree : [{ level: "p", text: "" }]).forEach((b, i) => {
-        const level = b.level || "p";
-        const block = document.createElement("div");
-        block.className = "block" + (i === 0 ? " selected" : "");
-        block.dataset.level = level;
-        block.innerHTML = `
-          <span class="tag ${level}">${levelName[level] || "正文"}</span>
-          <div class="block-text ${level}" contenteditable="true"></div>
+    const LEVEL_NAME = { h1: "一级", h2: "二级", h3: "三级", h4: "四级", p: "正文" };
+
+    function createBlockEl(level, text, selected) {
+      const lv = level || "p";
+      const block = document.createElement("div");
+      block.className = "block" + (selected ? " selected" : "");
+      block.dataset.level = lv;
+      block.innerHTML = `
+          <span class="tag ${lv}">${LEVEL_NAME[lv] || "正文"}</span>
+          <div class="block-text ${lv}" contenteditable="true"></div>
           <div class="block-actions">
             <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
             <div class="more-menu" role="menu">
@@ -1391,16 +1412,75 @@
               <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
             </div>
           </div>`;
-        block.querySelector(".block-text").textContent = b.text || "";
-        editor.appendChild(block);
+      block.querySelector(".block-text").textContent = text || "";
+      return block;
+    }
+
+    function expandBodyTreeRows(tree) {
+      /** 一段内含换行时拆成多行块，便于单独改层级。 */
+      const out = [];
+      (tree.length ? tree : [{ level: "p", text: "" }]).forEach((b) => {
+        const level = b.level || "p";
+        const parts = String(b.text || "").split(/\r?\n/);
+        if (parts.length <= 1) {
+          out.push({ level, text: parts[0] || "" });
+          return;
+        }
+        parts.forEach((part, i) => {
+          out.push({ level: i === 0 ? level : "p", text: part });
+        });
+      });
+      return out.length ? out : [{ level: "p", text: "" }];
+    }
+
+    function renderBodyTree(tree) {
+      const editor = document.getElementById("body-editor");
+      editor.innerHTML = "";
+      expandBodyTreeRows(tree).forEach((b, i) => {
+        editor.appendChild(createBlockEl(b.level, b.text, i === 0));
       });
       selectedBlock = editor.querySelector(".block.selected");
+    }
+
+    function getCaretTextOffset(el) {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return (el.textContent || "").length;
+      const range = sel.getRangeAt(0);
+      const pre = range.cloneRange();
+      pre.selectNodeContents(el);
+      pre.setEnd(range.startContainer, range.startOffset);
+      return pre.toString().length;
+    }
+
+    function setCaretTextOffset(el, offset) {
+      el.focus();
+      const sel = window.getSelection();
+      if (!sel) return;
+      const range = document.createRange();
+      let left = Math.max(0, offset | 0);
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let node = walker.nextNode();
+      while (node) {
+        if (node.length >= left) {
+          range.setStart(node, left);
+          range.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          return;
+        }
+        left -= node.length;
+        node = walker.nextNode();
+      }
+      range.selectNodeContents(el);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
     }
 
     function collectBodyTree() {
       return [...document.querySelectorAll("#body-editor .block")].map((block) => ({
         level: block.dataset.level || "p",
-        text: block.querySelector(".block-text")?.textContent || "",
+        text: (block.querySelector(".block-text")?.textContent || "").replace(/\u00a0/g, " "),
         label: "",
       }));
     }
@@ -1523,41 +1603,92 @@
 
     const dropzone = document.getElementById("dropzone");
     const fileInput = document.getElementById("file-input");
-    async function pickViaBackend() {
+
+    function arrayBufferToBase64(buffer) {
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+      return btoa(binary);
+    }
+
+    async function applyImportedDocx(data) {
+      if (!data || !data.ok) {
+        showToast((data && data.error) || "导入失败");
+        return;
+      }
+      rawText.value = data.text || "";
+      updateCharCount();
+      const name = (data.path || "docx").split(/[/\\]/).pop();
+      showToast("已导入 " + name);
+    }
+
+    async function importDocxFile(file) {
+      if (!file) return;
+      const name = file.name || "";
+      if (!/\.docx$/i.test(name)) {
+        showToast("请拖入或选择 .docx 文件");
+        return;
+      }
+      showToast("正在读取…");
       try {
-        const data = await callBackend("pickDocx");
-        if (!data.ok) {
-          if (data.error) showToast(data.error);
+        const localPath = file.path || file.filePath || "";
+        if (localPath) {
+          await applyImportedDocx(await callBackend("importDocxPath", localPath));
           return;
         }
-        rawText.value = data.text || "";
-        updateCharCount();
-        showToast("已导入 " + (data.path || "docx"));
+        const buf = await file.arrayBuffer();
+        const b64 = arrayBufferToBase64(buf);
+        await applyImportedDocx(await callBackend("importDocxBase64", name, b64));
+      } catch (err) {
+        showToast(err.message || "导入失败");
+      }
+    }
+
+    async function pickViaBackend() {
+      try {
+        await applyImportedDocx(await callBackend("pickDocx"));
       } catch (err) {
         fileInput.click();
       }
     }
+
     document.getElementById("btn-pick").addEventListener("click", (e) => {
       e.stopPropagation();
       pickViaBackend();
     });
-    dropzone.addEventListener("click", () => pickViaBackend());
+    dropzone.addEventListener("click", (e) => {
+      if (e.target.closest("#btn-pick")) return;
+      pickViaBackend();
+    });
     dropzone.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickViaBackend(); }
     });
     ["dragenter", "dragover"].forEach((ev) => {
-      dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add("drag"); });
-    });
-    ["dragleave", "drop"].forEach((ev) => {
       dropzone.addEventListener(ev, (e) => {
         e.preventDefault();
-        dropzone.classList.remove("drag");
-        if (ev === "drop") showToast("请点击「选择文件」导入 docx");
+        e.stopPropagation();
+        dropzone.classList.add("drag");
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
       });
     });
+    dropzone.addEventListener("dragleave", (e) => {
+      e.preventDefault();
+      if (!dropzone.contains(e.relatedTarget)) dropzone.classList.remove("drag");
+    });
+    dropzone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.remove("drag");
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      importDocxFile(file);
+    });
     fileInput.addEventListener("change", () => {
-      showToast("请通过桌面程序的选择文件对话框导入");
+      const file = fileInput.files && fileInput.files[0];
       fileInput.value = "";
+      if (file) importDocxFile(file);
     });
 
     document.querySelectorAll(".seal-option").forEach((btn) => {
@@ -1603,10 +1734,56 @@
         syncPreview();
       });
     });
-    document.getElementById("body-editor")?.addEventListener("input", () => refreshRequiredChecklist());
-
     const bodyEditor = document.getElementById("body-editor");
     const CN = "一二三四五六七八九十";
+
+    function explodeHtmlBreaks(block) {
+      /** 把 contenteditable 里误插入的 <br>/<div> 拆成后续独立块。 */
+      const textEl = block.querySelector(".block-text");
+      if (!textEl || !/<br|<\/div|<\/p/i.test(textEl.innerHTML)) return false;
+      const tmp = document.createElement("div");
+      tmp.innerHTML = textEl.innerHTML
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/(?:div|p)>/gi, "\n");
+      const parts = (tmp.textContent || "").split(/\n/);
+      if (parts.length <= 1) {
+        textEl.textContent = parts[0] || "";
+        return false;
+      }
+      textEl.textContent = parts[0];
+      let anchor = block;
+      for (let i = 1; i < parts.length; i++) {
+        const nb = createBlockEl("p", parts[i], false);
+        anchor.after(nb);
+        anchor = nb;
+      }
+      return true;
+    }
+
+    bodyEditor.addEventListener("input", (e) => {
+      const textEl = e.target.closest?.(".block-text");
+      if (textEl) explodeHtmlBreaks(textEl.closest(".block"));
+      refreshRequiredChecklist();
+    });
+
+    // Enter：在光标处拆成两个独立块（新块默认为正文）
+    bodyEditor.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+      const textEl = e.target.closest?.(".block-text");
+      if (!textEl || !bodyEditor.contains(textEl)) return;
+      e.preventDefault();
+      const block = textEl.closest(".block");
+      if (!block) return;
+      const full = textEl.textContent || "";
+      const off = getCaretTextOffset(textEl);
+      textEl.textContent = full.slice(0, off);
+      const newBlock = createBlockEl("p", full.slice(off), true);
+      bodyEditor.querySelectorAll(".block").forEach((b) => b.classList.remove("selected"));
+      block.after(newBlock);
+      selectedBlock = newBlock;
+      setCaretTextOffset(newBlock.querySelector(".block-text"), 0);
+      refreshRequiredChecklist();
+    });
 
     function closeAllMenus() {
       bodyEditor.querySelectorAll(".block-actions.open").forEach((el) => {
@@ -1617,17 +1794,18 @@
 
     function stripMarker(text, level) {
       if (level === "h1") return text.replace(/^[一二三四五六七八九十]+[、．.]\s*/, "");
-      if (level === "h2") return text.replace(/^（[一二三四五六七八九十]+）\s*/, "");
+      if (level === "h2") return text.replace(/^[（(][一二三四五六七八九十]+[）)]\s*/, "");
       if (level === "h3") return text.replace(/^\d+[．.、]\s*/, "");
-      if (level === "h4") return text.replace(/^（\d+）\s*/, "");
+      if (level === "h4") return text.replace(/^[（(]\d+[）)]\s*/, "");
       return text;
     }
 
     function applyMarker(rest, level, index) {
+      // 二级全角（一）；三级 1. 序数后无空格
       if (level === "h1") return `${CN[index]}、${rest}`;
       if (level === "h2") return `（${CN[index]}）${rest}`;
-      if (level === "h3") return `${index + 1}. ${rest}`;
-      if (level === "h4") return `（${index + 1}）${rest}`;
+      if (level === "h3") return `${index + 1}.${rest}`;
+      if (level === "h4") return `(${index + 1})${rest}`;
       return rest;
     }
 
@@ -1753,6 +1931,8 @@
               `本地离线 · 识别器 ${String(info.recognizer || "").toUpperCase()} · GB/T 9704-2012`;
             document.getElementById("recognizer-label").textContent =
               "识别：" + String(info.recognizer || "").toUpperCase();
+            const chip = document.getElementById("import-recognizer-chip");
+            if (chip) chip.textContent = "识别器：" + String(info.recognizer || "—").toUpperCase();
           } catch (_) {
             document.getElementById("app-sub").textContent = "本地离线 · 后端已连接";
           }

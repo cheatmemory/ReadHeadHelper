@@ -45,6 +45,87 @@ def test_jiangcheng_with_onnx_offsets():
     assert not ir.body_tree[0].text.startswith("江府办发")
 
 
+def test_recipient_colon_not_orphan_body_line():
+    """模型主送 end 不含冒号时，正文不得以单独「：」起头。"""
+    text = (
+        "澄江县人民政府文件\n"
+        "澄江县人民政府关于请求批准设立临港产业园的请示\n"
+        "云岭市人民政府：\n"
+        "为承接产业转移，培育新的经济增长点，我县拟在临港片区设立省级产业园。"
+        "现将有关情况请示如下：\n"
+        "一、选址范围\n"
+        "园区规划面积3.6平方公里。\n"
+        "澄江县人民政府\n"
+        "2024年5月10日\n"
+    )
+    title = "澄江县人民政府关于请求批准设立临港产业园的请示"
+    recip_core = "云岭市人民政府"
+    t0 = text.index(title)
+    r0 = text.index(recip_core)
+    sdk = {
+        "标题": [{"text": title, "start": t0, "end": t0 + len(title), "probability": 0.99}],
+        "主送机关": [
+            {
+                "text": recip_core,
+                "start": r0,
+                "end": r0 + len(recip_core),  # 故意不含冒号
+                "probability": 0.99,
+            }
+        ],
+        "发文机关署名": [
+            {
+                "text": "澄江县人民政府",
+                "start": text.rindex("澄江县人民政府"),
+                "end": text.rindex("澄江县人民政府") + len("澄江县人民政府"),
+                "probability": 0.99,
+            }
+        ],
+        "成文日期": [
+            {
+                "text": "2024年5月10日",
+                "start": text.index("2024年5月10日"),
+                "end": text.index("2024年5月10日") + len("2024年5月10日"),
+                "probability": 0.99,
+            }
+        ],
+    }
+    paras = extract_body_paragraphs(
+        text,
+        title=title,
+        recipient=recip_core,
+        date="2024年5月10日",
+        org_signature="澄江县人民政府",
+        sdk_result=sdk,
+    )
+    assert paras
+    assert paras[0] not in ("：", ":")
+    assert not paras[0].startswith("：")
+    assert "为承接产业转移" in paras[0]
+
+
+def test_glued_header_body_keeps_body_span():
+    """主送与正文粘同一行时，仍应切出正文主体，而非只剩落款前一行或整篇。"""
+    text = (ROOT / "fixtures" / "sample_text" / "lanshi_glued.txt").read_text(encoding="utf-8")
+    paras = extract_body_paragraphs(
+        text,
+        title="岚州市人民政府关于加强城市生活垃圾分类管理工作的通知",
+        recipient="各县（市、区）人民政府，市政府各部门：",
+        date="2026年3月12日",
+        org_signature="岚州市人民政府",
+    )
+    joined = "\n".join(paras)
+    assert "为深入贯彻" in joined
+    assert "保障措施" in joined or "市城管局" in joined
+    assert "000037" not in joined
+    assert "岚政发" not in joined
+    assert "附件" not in joined
+    assert "抄送" not in joined
+    assert "印发" not in joined
+    # 不应只剩最后一句
+    assert len(joined) > 80
+    assert not joined.startswith("市城管局")
+
+
 def test_footer_org_does_not_steal_start():
     """文末重复出现机关名时，起点仍应在文首主送之后。"""
     text = (

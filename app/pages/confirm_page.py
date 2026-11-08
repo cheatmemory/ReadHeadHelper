@@ -50,8 +50,8 @@ class ConfirmPage(QWidget):
         seal_box = QGroupBox("落款版式 *")
         seal_row = QHBoxLayout(seal_box)
         for key, title, desc in (
-            ("stamp_layout", "有章版式", "成文日期右空四字；署名相对日期居中预留章位。"),
-            ("no_stamp_layout", "无章版式", "署名右空二字；日期首字比署名右移二字。"),
+            ("stamp_layout", "有章版式", "日期右空四字；署名前一行相对日期居中；附件下不空行。"),
+            ("no_stamp_layout", "无章版式", "附件下空一行；署名右空二字、日期首字右移二字；日期更长则日期右空二字并加大署名右空。"),
         ):
             btn = QPushButton(f"{title}\n{desc}")
             btn.setObjectName("SealOption")
