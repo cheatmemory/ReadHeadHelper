@@ -1766,23 +1766,46 @@
       refreshRequiredChecklist();
     });
 
-    // Enter：在光标处拆成两个独立块（新块默认为正文）
+    // Enter：光标处拆成两块；块首 Backspace：并入上一段
     bodyEditor.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+      if (e.isComposing) return;
       const textEl = e.target.closest?.(".block-text");
       if (!textEl || !bodyEditor.contains(textEl)) return;
-      e.preventDefault();
       const block = textEl.closest(".block");
       if (!block) return;
-      const full = textEl.textContent || "";
-      const off = getCaretTextOffset(textEl);
-      textEl.textContent = full.slice(0, off);
-      const newBlock = createBlockEl("p", full.slice(off), true);
-      bodyEditor.querySelectorAll(".block").forEach((b) => b.classList.remove("selected"));
-      block.after(newBlock);
-      selectedBlock = newBlock;
-      setCaretTextOffset(newBlock.querySelector(".block-text"), 0);
-      refreshRequiredChecklist();
+
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const full = textEl.textContent || "";
+        const off = getCaretTextOffset(textEl);
+        textEl.textContent = full.slice(0, off);
+        const newBlock = createBlockEl("p", full.slice(off), true);
+        bodyEditor.querySelectorAll(".block").forEach((b) => b.classList.remove("selected"));
+        block.after(newBlock);
+        selectedBlock = newBlock;
+        setCaretTextOffset(newBlock.querySelector(".block-text"), 0);
+        refreshRequiredChecklist();
+        return;
+      }
+
+      if (e.key === "Backspace") {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed) return; // 有选区时走默认删除
+        if (getCaretTextOffset(textEl) !== 0) return;
+        const prev = block.previousElementSibling;
+        if (!prev || !prev.classList.contains("block")) return;
+        e.preventDefault();
+        const prevText = prev.querySelector(".block-text");
+        if (!prevText) return;
+        const joinAt = (prevText.textContent || "").length;
+        prevText.textContent = (prevText.textContent || "") + (textEl.textContent || "");
+        block.remove();
+        bodyEditor.querySelectorAll(".block").forEach((b) => b.classList.remove("selected"));
+        prev.classList.add("selected");
+        selectedBlock = prev;
+        setCaretTextOffset(prevText, joinAt);
+        refreshRequiredChecklist();
+      }
     });
 
     function closeAllMenus() {

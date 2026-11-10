@@ -431,6 +431,7 @@ def fill_attachment_caption(result, text):
                     split_done = True
                     break
             if split_done:
+                j += 1  # 本行已消费；勿让外层 i=j 停在同一行死循环
                 break
             # 遇到署名行（含断行署名的起始片段）即停
             # 断行片段要求：短、以机关名前缀成分结尾（如"松江市人民"），
@@ -453,9 +454,8 @@ def fill_attachment_caption(result, text):
             block.append(cur)
             j += 1
         if not block:
-            i = j
+            i = max(j, i + 1)
             continue
-        first = re.sub(r"^附件\s*\d*\s*[：:]", "", _n(block[0])).strip()
         raw_first = re.sub(r"^附件\s*\d*\s*[：:]", "", block[0]).strip()
         if raw_first:
             block[0] = raw_first
@@ -476,10 +476,12 @@ def fill_attachment_caption(result, text):
             e = e.strip()
             if not e or e in ("附件", "附件：", "附件:"):
                 continue
-            if _n(e).replace("\n", "") in have:
+            key = _n(e).replace("\n", "")
+            if key in have:
                 continue
+            have.add(key)
             items.append({"text": e, "prob": 1.0, "source": "regex"})
-        i = j
+        i = max(j, i + 1)  # 保证前进，避免附件头行反复匹配
 
     if items:
         result.setdefault("附件说明", []).extend(items)
