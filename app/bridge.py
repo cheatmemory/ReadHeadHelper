@@ -9,14 +9,16 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Slot, Signal
+from concurrent.futures import ThreadPoolExecutor
+
+from PySide6.QtCore import QObject, QTimer, Slot, Signal
 from PySide6.QtWidgets import QFileDialog
 
 from app.session import AppSession
 from core.body_structure.parser import renumber_blocks
 from core.config_loader import load_config, project_root
 from core.ir.builder import split_names
-from core.ir.schema import BodyBlock, SealMode
+from core.ir.schema import BodyBlock, ModelOutput, SealMode
 from core.layout import DocxEngine
 from core.recognize import create_recognizer
 from core.text_extract import extract_text_from_docx
@@ -25,6 +27,7 @@ from core.text_extract import extract_text_from_docx
 class BackendBridge(QObject):
     statusChanged = Signal(str)
     toast = Signal(str)
+    recognizeFinished = Signal(str)  # JSON：识别结束（成功/失败），供前端异步接收
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -33,11 +36,43 @@ class BackendBridge(QObject):
         self.recognizer = None
         self.session.recognizer_name = "pending"
         self._last_export = ""
+        self._recog_busy = False
+        self._recog_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="recognize")
+        self._recog_future = None
 
     def _ensure_recognizer(self):
         if self.recognizer is not None:
             return
         self.recognizer, self.session.recognizer_name = create_recognizer(self.config, project_root())
+
+    def _build_recognize_payload(self) -> dict:
+        ir = self.session.ir
+        return {
+            "ok": True,
+            "recognizer": self.session.recognizer_name,
+            "fields": {
+                "copy_number": ir.copy_number,
+                "secret_combo": (
+                    f"{ir.secret_level}★{ir.secret_period}"
+                    if ir.secret_level and ir.secret_period and "★" not in ir.secret_level
+                    else (ir.secret_level or "")
+                ),
+                "urgency": ir.urgency,
+                "issuer_sign": "、".join(ir.signers),
+                "org_mark": "、".join(ir.org_marks),
+                "doc_number": ir.doc_number,
+                "title": ir.title,
+                "recipient": ir.recipient,
+                "attachment_caption": ir.attachment_caption,
+                "org_signature": ir.org_signature,
+                "date": ir.date,
+                "note": ir.note,
+                "cc_recipients": ir.cc_recipients,
+                "print_org": ir.print_org,
+                "print_date": ir.print_date,
+            },
+            "body_tree": [b.to_dict() for b in ir.body_tree],
+        }
 
     @Slot(result=str)
     def getAppInfo(self) -> str:
@@ -114,6 +149,7 @@ class BackendBridge(QObject):
 
     @Slot(str, result=str)
     def recognize(self, text: str) -> str:
+        """同步识别（兼容旧调用）；界面请用 startRecognize，避免主线程卡死。"""
         text = (text or "").strip()
         if not text:
             return json.dumps({"ok": False, "error": "请先粘贴或导入文稿"}, ensure_ascii=False)
@@ -121,36 +157,59 @@ class BackendBridge(QObject):
             self._ensure_recognizer()
             model = self.recognizer.recognize(text)
             self.session.apply_model(model, source_text=text)
-            ir = self.session.ir
-            payload = {
-                "ok": True,
-                "recognizer": self.session.recognizer_name,
-                "fields": {
-                    "copy_number": ir.copy_number,
-                    "secret_combo": (
-                        f"{ir.secret_level}★{ir.secret_period}"
-                        if ir.secret_level and ir.secret_period and "★" not in ir.secret_level
-                        else (ir.secret_level or "")
-                    ),
-                    "urgency": ir.urgency,
-                    "issuer_sign": "、".join(ir.signers),
-                    "org_mark": "、".join(ir.org_marks),
-                    "doc_number": ir.doc_number,
-                    "title": ir.title,
-                    "recipient": ir.recipient,
-                    "attachment_caption": ir.attachment_caption,
-                    "org_signature": ir.org_signature,
-                    "date": ir.date,
-                    "note": ir.note,
-                    "cc_recipients": ir.cc_recipients,
-                    "print_org": ir.print_org,
-                    "print_date": ir.print_date,
-                },
-                "body_tree": [b.to_dict() for b in ir.body_tree],
-            }
-            return json.dumps(payload, ensure_ascii=False)
+            return json.dumps(self._build_recognize_payload(), ensure_ascii=False)
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    def _run_recognize_job(self, text: str):
+        """线程池任务：返回 (recognizer, name, model) 或抛错。"""
+        rec = self.recognizer
+        name = self.session.recognizer_name
+        if rec is None or name in ("pending", "onnx(延迟加载)"):
+            rec, name = create_recognizer(self.config, project_root())
+        model = rec.recognize(text)
+        return rec, name, model
+
+    @Slot(str, result=str)
+    def startRecognize(self, text: str) -> str:
+        """立即返回并在后台线程识别，完成后发 recognizeFinished(JSON)。"""
+        if self._recog_busy:
+            return json.dumps({"ok": False, "error": "正在识别，请稍候"}, ensure_ascii=False)
+        text = (text or "").strip()
+        if not text:
+            return json.dumps({"ok": False, "error": "请先粘贴或导入文稿"}, ensure_ascii=False)
+
+        self._recog_busy = True
+        fut = self._recog_pool.submit(self._run_recognize_job, text)
+        fut._source_text = text  # type: ignore[attr-defined]
+        self._recog_future = fut
+        QTimer.singleShot(40, self._poll_recognize_future)
+        return json.dumps({"ok": True, "started": True}, ensure_ascii=False)
+
+    @Slot()
+    def _poll_recognize_future(self) -> None:
+        fut = self._recog_future
+        if fut is None:
+            return
+        if not fut.done():
+            QTimer.singleShot(50, self._poll_recognize_future)
+            return
+        self._recog_future = None
+        source = getattr(fut, "_source_text", "") or ""
+        try:
+            rec, name, model = fut.result()
+            self.recognizer = rec
+            self.session.recognizer_name = name
+            self.session.apply_model(model, source_text=source)
+            payload = self._build_recognize_payload()
+        except Exception as exc:  # noqa: BLE001
+            self._recog_busy = False
+            self.recognizeFinished.emit(
+                json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+            )
+            return
+        self._recog_busy = False
+        self.recognizeFinished.emit(json.dumps(payload, ensure_ascii=False))
 
     @Slot(str, result=str)
     def renumberBody(self, body_json: str) -> str:
