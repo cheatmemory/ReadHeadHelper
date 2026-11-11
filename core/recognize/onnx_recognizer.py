@@ -30,14 +30,24 @@ def _first(result: dict, key: str) -> str:
 
 
 def _join_attachment_captions(result: dict) -> str:
-    """合并全部「附件说明」条目（_first 只会丢掉第 2 条起）。"""
+    """合并全部「附件说明」条目（_first 只会丢掉第 2 条起）。
+
+    单附件不加序号；多附件才补阿拉伯数字顺序号（§7.3.4）。
+    """
     items = result.get("附件说明") or []
-    parts: list[str] = []
-    for i, it in enumerate(items, 1):
+    cleaned: list[str] = []
+    for it in items:
         t = _clean(str(it.get("text") or ""))
         if not t:
             continue
         t = re.sub(r"^附件\s*[:：]\s*", "", t)
+        cleaned.append(t)
+    if not cleaned:
+        return ""
+    if len(cleaned) == 1:
+        return cleaned[0]
+    parts: list[str] = []
+    for i, t in enumerate(cleaned, 1):
         if not re.match(r"^\d+\s*[\.．、]", t):
             t = f"{i}.{t}"
         parts.append(t)

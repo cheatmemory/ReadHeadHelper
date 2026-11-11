@@ -414,12 +414,15 @@ def fill_attachment_caption(result, text):
         if not m:
             i += 1
             continue
+        # 国标附件说明在落款前；脏文本常把「附件：」放在成文日期之后。
+        # 若附件头已在 end_idx（日期/署名）之后，不再用 end_idx 卡死，改收到抄送/印发为止。
+        stop_at = end_idx if i < end_idx else len(lines)
         block = []
         j = i
         while j < len(lines):
             cur = lines[j].strip()
             nl = _n(cur)
-            if j >= end_idx or ATT_STOP_RE.match(nl):
+            if j >= stop_at or ATT_STOP_RE.match(nl):
                 break
             # 粘连行：行尾=模型署名值、行首有前缀 → 前缀并入附件条目后停止
             split_done = False

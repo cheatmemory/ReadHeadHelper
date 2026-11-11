@@ -640,13 +640,21 @@
     }
     .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+    /* 不用 backdrop-filter：Qt WebEngine 下与转圈动画叠用易整页闪烁 */
     .busy-overlay {
       position: fixed; inset: 0; z-index: 40;
-      display: none; align-items: center; justify-content: center;
-      background: rgba(20, 24, 33, 0.38);
-      backdrop-filter: blur(2px);
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(20, 24, 33, 0.42);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 120ms ease, visibility 120ms ease;
     }
-    .busy-overlay.show { display: flex; }
+    .busy-overlay.show {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+    }
     .busy-card {
       min-width: 220px; max-width: 320px;
       padding: 22px 26px;
@@ -1194,7 +1202,7 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <div class="busy-overlay" id="busy-overlay" hidden aria-hidden="true">
+  <div class="busy-overlay" id="busy-overlay" aria-hidden="true">
     <div class="busy-card" role="status" aria-live="assertive" aria-busy="true">
       <div class="busy-spinner" aria-hidden="true"></div>
       <strong id="busy-title">识别中，请稍候</strong>
@@ -1587,7 +1595,7 @@
       recognizing = !!on;
       document.body.classList.toggle("is-recognizing", recognizing);
       if (busyOverlay) {
-        busyOverlay.hidden = !recognizing;
+        // 只用 .show 控制显隐，避免 hidden/display 来回切导致闪一下
         busyOverlay.classList.toggle("show", recognizing);
         busyOverlay.setAttribute("aria-hidden", recognizing ? "false" : "true");
       }
@@ -1628,14 +1636,15 @@
           data = await callBackend("recognize", rawText.value);
         }
         if (!data || !data.ok) throw new Error((data && data.error) || "识别失败");
+        // 先关遮罩再切步骤/填表，避免大布局在 blur/遮罩下重绘闪烁
+        setRecognizing(false);
         applyRecognizeResult(data);
         document.getElementById("recognizer-label").textContent = "识别：" + (data.recognizer || "").toUpperCase();
-        showToast("识别完成（" + (data.recognizer || "") + "）");
         setStep(2);
+        showToast("识别完成（" + (data.recognizer || "") + "）");
       } catch (err) {
-        showToast(String(err.message || err));
-      } finally {
         setRecognizing(false);
+        showToast(String(err.message || err));
       }
     }
 
