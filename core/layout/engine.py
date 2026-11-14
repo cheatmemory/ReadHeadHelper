@@ -14,8 +14,17 @@ from docx.shared import Mm, Pt, RGBColor, Twips
 from core.body_structure.parser import normalize_structure_markers
 from core.ir.schema import BodyBlock, LayoutIR, SealMode
 from core.layout import units as U
+from core.layout.attach_merge import append_docx_body, load_attachment_bytes
 from core.layout.font_measure import max_one_line_font_pt
 from core.layout.office_measure import layout_text_width_pt
+
+
+def _add_page_break(doc: Document) -> None:
+    p = doc.add_paragraph()
+    run = p.add_run()
+    br = OxmlElement("w:br")
+    br.set(qn("w:type"), "page")
+    run._r.append(br)
 
 
 def _attachment_caption_lines(caption: str) -> list[str]:
@@ -354,12 +363,32 @@ class DocxEngine:
         self._write_body(doc, ir)
         self._write_signature(doc, ir)
         self._write_note(doc, ir)
+        self._write_attachment_pages(doc, ir)
         self._write_banji(doc, ir)
 
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         doc.save(str(out_path))
         return out_path
+
+    def _write_attachment_pages(self, doc: Document, ir: LayoutIR) -> None:
+        """附件另页：不做国标标题居中等排版；仅「附件N」+ 空行 + 原文。"""
+        items = list(ir.attachments or [])
+        if not items:
+            return
+        heiti = self.fonts["heiti"]
+        for i, item in enumerate(items, start=1):
+            raw = load_attachment_bytes(item)
+            if not raw:
+                continue
+            _add_page_break(doc)
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            _set_paragraph_spacing(p, line_pt=self.line_pt)
+            run = p.add_run(f"附件{i}")
+            _set_run_font(run, name=heiti, size_pt=U.PT_3)
+            _empty_grid_lines(doc, 1, self.line_pt)
+            append_docx_body(doc, raw)
 
     def _write_banner(self, doc: Document, ir: LayoutIR):
         # 份号 / 密级 / 紧急：有则自上而下顶格

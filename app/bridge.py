@@ -18,7 +18,7 @@ from app.session import AppSession
 from core.body_structure.parser import renumber_blocks
 from core.config_loader import load_config, project_root
 from core.ir.builder import split_names
-from core.ir.schema import BodyBlock, LayoutIR, ModelOutput, SealMode
+from core.ir.schema import AttachmentDocx, BodyBlock, LayoutIR, ModelOutput, SealMode
 from core.layout import DocxEngine
 from core.layout.office_preview import render_docx_preview
 from core.recognize import create_recognizer
@@ -111,6 +111,30 @@ class BackendBridge(QObject):
             return self._read_docx(path)
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    @Slot(result=str)
+    def pickAttachmentDocx(self) -> str:
+        """选择一个或多个附件 docx，返回 base64（Qt WebEngine 无法可靠弹出隐藏 file input）。"""
+        paths, _ = QFileDialog.getOpenFileNames(None, "选择附件 docx（可多选）", "", "Word (*.docx)")
+        if not paths:
+            return json.dumps({"ok": False, "cancelled": True}, ensure_ascii=False)
+        items: list[dict] = []
+        try:
+            for path in paths:
+                p = Path(path)
+                if not p.is_file() or p.suffix.lower() != ".docx":
+                    continue
+                items.append(
+                    {
+                        "name": p.name,
+                        "data_b64": base64.b64encode(p.read_bytes()).decode("ascii"),
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+        if not items:
+            return json.dumps({"ok": False, "error": "未选择有效的 .docx 文件"}, ensure_ascii=False)
+        return json.dumps({"ok": True, "attachments": items}, ensure_ascii=False)
 
     @Slot(str, result=str)
     def importDocxPath(self, path: str) -> str:
@@ -258,7 +282,11 @@ class BackendBridge(QObject):
         """后台线程：写 docx + Office 渲页图（勿在主线程做）。"""
         seal = ir_data.get("seal_mode")
         body = [BodyBlock.from_dict(x) for x in (ir_data.get("body_tree") or [])]
-        skip = {"seal_mode", "body_tree"}
+        atts = [
+            AttachmentDocx.from_dict(x) if isinstance(x, dict) else AttachmentDocx(name=str(x))
+            for x in (ir_data.get("attachments") or [])
+        ]
+        skip = {"seal_mode", "body_tree", "attachments"}
         kwargs = {
             k: v
             for k, v in ir_data.items()
@@ -267,9 +295,12 @@ class BackendBridge(QObject):
         ir = LayoutIR(**kwargs)
         ir.seal_mode = SealMode(seal) if seal else None
         ir.body_tree = body
+        ir.attachments = atts
         docx_path = Path(tmp_dir) / "preview.docx"
         DocxEngine().render(ir, docx_path)
-        return render_docx_preview(docx_path, max_pages=3, zoom=1.6)
+        # 有附件时多渲几页，避免只看到正文
+        max_pages = 3 + max(0, len(atts)) * 2
+        return render_docx_preview(docx_path, max_pages=max_pages, zoom=1.6)
 
     @Slot(str, result=str)
     def startPreview(self, payload_json: str) -> str:
@@ -373,3 +404,9 @@ class BackendBridge(QObject):
 
         body = data.get("body_tree") or []
         ir.body_tree = [BodyBlock.from_dict(x) for x in body]
+
+        atts = data.get("attachments") or []
+        ir.attachments = [
+            AttachmentDocx.from_dict(x) if isinstance(x, dict) else AttachmentDocx(name=str(x))
+            for x in atts
+        ]

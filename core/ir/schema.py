@@ -113,6 +113,27 @@ class OptionalConfirm:
 
 
 @dataclass
+class AttachmentDocx:
+    """用户上传的附件 docx（不做国标另面排版，导出时原样接入）。"""
+
+    name: str = ""
+    data_b64: str = ""
+    path: str = ""
+
+    def to_dict(self) -> dict[str, str]:
+        return {"name": self.name, "data_b64": self.data_b64, "path": self.path}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "AttachmentDocx":
+        data = data or {}
+        return cls(
+            name=str(data.get("name") or ""),
+            data_b64=str(data.get("data_b64") or data.get("b64") or ""),
+            path=str(data.get("path") or ""),
+        )
+
+
+@dataclass
 class LayoutIR:
     """排版引擎唯一输入。"""
 
@@ -138,6 +159,8 @@ class LayoutIR:
     org_marks: list[str] = field(default_factory=list)
     cc_recipients: str = ""
     body_tree: list[BodyBlock] = field(default_factory=list)
+    # 上传的附件正文（另页：附件N + 空行 + 原文）
+    attachments: list[AttachmentDocx] = field(default_factory=list)
 
     # 选填确认（字段名 → 是否确认无此项）
     absent_flags: dict[str, bool] = field(default_factory=dict)
@@ -172,4 +195,5 @@ class LayoutIR:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["seal_mode"] = self.seal_mode.value if self.seal_mode else None
+        d["attachments"] = [a.to_dict() if hasattr(a, "to_dict") else dict(a) for a in self.attachments]
         return d
