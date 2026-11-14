@@ -31,13 +31,15 @@
     }
 
     * { box-sizing: border-box; }
-    html, body { height: 100%; }
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
     body {
       margin: 0;
       font-family: var(--font-ui);
       color: var(--ink);
       background: var(--surface);
-      min-height: 100%;
       -webkit-font-smoothing: antialiased;
       text-rendering: optimizeLegibility;
     }
@@ -60,10 +62,13 @@
 
     .app {
       background: var(--surface);
-      min-height: 100vh;
-      min-height: 100dvh;
+      height: 100%;
+      max-height: 100vh;
+      max-height: 100dvh;
       display: grid;
-      grid-template-rows: auto auto 1fr auto;
+      /* topbar · stepper · 操作栏 · 主区（操作栏置顶，避免滚到底才能点下一步） */
+      grid-template-rows: auto auto auto 1fr;
+      overflow: hidden;
     }
 
     .topbar {
@@ -145,13 +150,18 @@
       display: grid;
       grid-template-columns: 1.15fr 0.85fr;
       min-height: 0;
+      height: 100%;
       background: var(--surface);
       overflow: hidden;
     }
     .pane {
-      min-width: 0; min-height: 0;
-      overflow: auto;
+      min-width: 0;
+      min-height: 0;
+      height: 100%;
+      overflow-x: hidden;
+      overflow-y: auto;
       padding: 20px 22px;
+      overscroll-behavior: contain;
     }
     .pane + .pane {
       border-left: 1px solid var(--line);
@@ -470,6 +480,7 @@
       color: #6b4a00; font-size: 12.5px; line-height: 1.5;
       margin-bottom: 12px;
     }
+    .alert[hidden] { display: none !important; }
     .alert.error {
       background: #fdecec; border-color: #f0b4b4; color: #8a1f1f;
     }
@@ -549,6 +560,61 @@
     .more-menu button.danger { color: var(--red); }
 
     /* Export / Office 一比一预览 */
+    .pane-preview {
+      display: flex !important;
+      flex-direction: column;
+      min-height: 0;
+      height: 100%;
+      overflow: hidden;
+      padding: 12px 14px;
+    }
+    .pane-preview .office-preview-pane { flex: 1; min-height: 0; }
+    .field.is-missing-field,
+    #section-seal.is-missing-field {
+      outline: 1px solid #f0b4b4;
+      background: #fff8f8;
+      border-radius: 8px;
+      padding: 8px;
+    }
+    #missing-required-section {
+      position: sticky;
+      top: 0;
+      z-index: 6;
+      margin-bottom: 12px;
+      background: #fff8f8;
+      border-color: #f0b4b4;
+      box-shadow: 0 8px 20px rgba(180, 35, 44, 0.08);
+    }
+    #missing-required-section[hidden] { display: none !important; }
+    #missing-required-section .section-h .dot { background: #b4232c; }
+    #missing-required-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    #missing-required-nav button {
+      appearance: none;
+      border: 1px solid #f0b4b4;
+      background: #fff;
+      color: #8a1f1f;
+      font: inherit;
+      font-size: 12.5px;
+      font-weight: 500;
+      padding: 7px 11px;
+      border-radius: 6px;
+      cursor: pointer;
+      line-height: 1.3;
+      transition: background var(--ease), border-color var(--ease);
+    }
+    #missing-required-nav button:hover {
+      background: #fff1f1;
+      border-color: #e08a8a;
+    }
+    #missing-required-nav button:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
+
     .office-preview-pane {
       display: flex; flex-direction: column; gap: 10px; min-height: 0; height: 100%;
     }
@@ -593,6 +659,9 @@
       margin: 48px 16px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.6;
     }
     .office-preview-empty strong { color: var(--ink-soft); font-weight: 600; }
+    .office-preview-empty.is-wait strong { color: var(--warn); }
+    .office-preview-empty.is-loading strong { color: var(--focus); }
+    .office-preview-empty.is-error strong { color: #8a1f1f; }
 
     .export-actions {
       display: grid; gap: 10px; margin-top: 16px;
@@ -610,18 +679,31 @@
 
     .footerbar {
       display: flex; align-items: center; justify-content: space-between;
-      gap: 12px; padding: 12px 18px;
-      background: #fff; border-top: 1px solid var(--line);
+      gap: 12px; padding: 10px 18px;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      position: sticky; top: 0; z-index: 5;
     }
     .footer-left {
       display: flex; align-items: center; gap: 10px;
       font-size: 12px; color: var(--muted);
+      min-width: 0;
     }
-    .footer-right { display: flex; gap: 8px; }
+    .footer-right { display: flex; gap: 8px; flex: 0 0 auto; }
 
     .view { display: none; }
     .view.active { display: contents; }
-    .view.active > .pane { display: block; }
+    .view.active > .pane {
+      display: block;
+      min-height: 0;
+      height: 100%;
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+    .view.active > .pane-preview {
+      display: flex !important;
+      overflow: hidden;
+    }
 
     .toast {
       position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(12px);
@@ -707,13 +789,25 @@
     </header>
 
     <nav class="stepper" aria-label="流程步骤">
-        <button class="step active" data-step="1" type="button"><span class="n">1</span><span class="label">导入文稿</span></button>
-        <button class="step" data-step="2" type="button"><span class="n">2</span><span class="label">确认要素</span></button>
-        <button class="step" data-step="3" type="button"><span class="n">3</span><span class="label">正文结构</span></button>
-        <button class="step" data-step="4" type="button"><span class="n">4</span><span class="label">生成导出</span></button>
-      </nav>
+      <button class="step active" data-step="1" type="button"><span class="n">1</span><span class="label">导入文稿</span></button>
+      <button class="step" data-step="2" type="button"><span class="n">2</span><span class="label">确认要素</span></button>
+      <button class="step" data-step="3" type="button"><span class="n">3</span><span class="label">正文结构</span></button>
+      <button class="step" data-step="4" type="button"><span class="n">4</span><span class="label">生成导出</span></button>
+    </nav>
 
-      <div class="main">
+    <div class="footerbar" role="navigation" aria-label="步骤操作">
+      <div class="footer-left">
+        <span id="step-label">步骤 1 / 4 · 导入文稿</span>
+        <span>·</span>
+        <span id="recognizer-label">识别：连接中…</span>
+      </div>
+      <div class="footer-right">
+        <button class="btn" type="button" id="btn-back" disabled>上一步</button>
+        <button class="btn primary" type="button" id="btn-next">开始识别</button>
+      </div>
+    </div>
+
+    <div class="main">
         <!-- STEP 1：左上传/拖拽，右文本框 -->
         <section class="view view-import active" data-view="1">
           <div class="pane pane-import">
@@ -721,12 +815,6 @@
               <div>
                 <h1>导入文稿</h1>
                 <p>上传或拖入 docx（只抽纯文本），也可在右侧直接粘贴。</p>
-              </div>
-              <div class="toolbar">
-                <button class="btn" type="button" id="btn-load-sample">
-                  <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M213.66,82.34l-56-56A8,8,0,0,0,152,24H56A16,16,0,0,0,40,40V216a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V88A8,8,0,0,0,213.66,82.34ZM160,51.31,188.69,80H160ZM200,216H56V40h88V88a8,8,0,0,0,8,8h48Z"/></svg>
-                  载入样例
-                </button>
               </div>
             </div>
             <div class="pane-import-body">
@@ -768,11 +856,10 @@
             <div class="pane-head">
               <div>
                 <h1>确认要素</h1>
-                <p>核对识别结果。必填为空会阻断导出；选填为空时点右侧「无此项」确认，或补填内容。</p>
+                <p>核对识别结果；缺项可从上方跳转。右侧为实时预览。</p>
               </div>
               <div class="toolbar">
-                <span class="chip ok">已识别 14 项</span>
-                <span class="chip warn">必填待确认</span>
+                <span class="chip warn" id="req-status">待确认</span>
               </div>
             </div>
 
@@ -781,19 +868,27 @@
               <div>请先选择<strong>有章 / 无章版式</strong>。未选择时无法进入导出。</div>
             </div>
 
-            <div class="section">
+            <div class="section" id="missing-required-section" hidden>
+              <div class="section-h">
+                <h2><span class="dot"></span>待补必填</h2>
+                <span class="hint">点击跳转到对应项</span>
+              </div>
+              <div id="missing-required-nav" role="list"></div>
+            </div>
+
+            <div class="section" id="section-seal" data-req-key="seal_mode">
               <div class="section-h">
                 <h2><span class="dot"></span>落款版式<span class="req">*</span></h2>
-                <span class="hint">seal_mode · 必选</span>
+                <span class="hint">必选，影响署名与日期位置</span>
               </div>
               <div class="seal-group" role="radiogroup" aria-label="落款版式">
                 <button type="button" class="seal-option" data-seal="stamp_layout" role="radio" aria-checked="false">
                   <strong>有章版式</strong>
-                  <span>日期右空四字；署名前一行相对日期居中；附件下不空行。</span>
+                  <span>按加盖印章排版署名与成文日期。</span>
                 </button>
                 <button type="button" class="seal-option" data-seal="no_stamp_layout" role="radio" aria-checked="false">
                   <strong>无章版式</strong>
-                  <span>附件下空一行；署名右空二字、日期首字右移二字；日期更长则日期右空二字并加大署名右空。</span>
+                  <span>按不加盖印章排版署名与成文日期。</span>
                 </button>
               </div>
             </div>
@@ -801,7 +896,7 @@
             <div class="section">
               <div class="section-h">
                 <h2><span class="dot"></span>版头</h2>
-                <span class="hint">选填项可点右侧「无此项」确认空缺</span>
+                <span class="hint">选填项可点「无此项」</span>
               </div>
               <div class="grid-2">
                 <div class="field is-none">
@@ -832,17 +927,17 @@
                   </div>
                   <input id="f-signers" value="" placeholder="上行文填写，多人顿号分隔" disabled />
                 </div>
-                <div class="field full">
+                <div class="field full" data-req-key="org_mark">
                   <div class="field-head">
                     <label for="f-org">发文机关标志<span class="req">*</span></label>
                   </div>
-                  <input id="f-org" value="××市人民政府" />
+                  <input id="f-org" value="" placeholder="如 ××市人民政府" />
                 </div>
-                <div class="field full">
+                <div class="field full" data-req-key="doc_number">
                   <div class="field-head">
                     <label for="f-docno">发文字号<span class="req">*</span></label>
                   </div>
-                  <input id="f-docno" value="×政发〔2024〕12号" />
+                  <input id="f-docno" value="" placeholder="如 ×政发〔2024〕12号" />
                 </div>
               </div>
             </div>
@@ -850,14 +945,14 @@
             <div class="section">
               <div class="section-h">
                 <h2><span class="dot"></span>主体</h2>
-                <span class="hint">main</span>
+                <span class="hint">标题、主送与附件说明</span>
               </div>
               <div class="grid-2">
-                <div class="field full">
+                <div class="field full" data-req-key="title">
                   <div class="field-head">
                     <label for="f-title">标题<span class="req">*</span></label>
                   </div>
-                  <textarea id="f-title">关于进一步加强城市精细化管理工作的通知</textarea>
+                  <textarea id="f-title" placeholder="公文标题"></textarea>
                 </div>
                 <div class="field full">
                   <div class="field-head">
@@ -867,14 +962,14 @@
                       <button type="button" class="none-toggle" aria-pressed="false" aria-controls="f-to">无此项</button>
                     </div>
                   </div>
-                  <input id="f-to" value="各区县人民政府，市政府各部门、各直属机构：" />
+                  <input id="f-to" value="" placeholder="如 各区县人民政府，市政府各部门、各直属机构：" />
                 </div>
                 <div class="field full">
                   <div class="field-head">
                     <label for="f-attach">附件说明 <span class="tag-opt">选填</span></label>
                     <button type="button" class="none-toggle" aria-pressed="false" aria-controls="f-attach">无此项</button>
                   </div>
-                  <input id="f-attach" value="城市精细化管理重点任务清单" />
+                  <input id="f-attach" value="" placeholder="附件说明" />
                   <span class="hint">正文下附件说明行；不做附件另面</span>
                 </div>
               </div>
@@ -883,20 +978,20 @@
             <div class="section">
               <div class="section-h">
                 <h2><span class="dot"></span>落款与版记</h2>
-                <span class="hint">footer + LayoutIR</span>
+                <span class="hint">署名、日期与印发信息</span>
               </div>
               <div class="grid-2">
-                <div class="field">
+                <div class="field" data-req-key="org_signature">
                   <div class="field-head">
                     <label for="f-orgsig">发文机关署名<span class="req">*</span></label>
                   </div>
-                  <input id="f-orgsig" value="××市人民政府" />
+                  <input id="f-orgsig" value="" placeholder="发文机关署名" />
                 </div>
-                <div class="field">
+                <div class="field" data-req-key="date">
                   <div class="field-head">
                     <label for="f-date">成文日期<span class="req">*</span></label>
                   </div>
-                  <input id="f-date" value="2024年3月15日" />
+                  <input id="f-date" value="" placeholder="如 2024年3月15日" />
                 </div>
                 <div class="field is-none">
                   <div class="field-head">
@@ -912,43 +1007,38 @@
                   </div>
                   <input id="f-cc" value="" placeholder="模型不含此字段，需人工填写" disabled />
                 </div>
-                <div class="field">
+                <div class="field" data-req-key="print_org">
                   <div class="field-head">
                     <label for="f-print-org">印发机关<span class="req">*</span></label>
                   </div>
-                  <input id="f-print-org" value="××市人民政府办公室" />
+                  <input id="f-print-org" value="" placeholder="印发机关" />
                 </div>
-                <div class="field">
+                <div class="field" data-req-key="print_date">
                   <div class="field-head">
                     <label for="f-print-date">印发日期<span class="req">*</span></label>
                   </div>
-                  <input id="f-print-date" value="2024年3月16日" />
+                  <input id="f-print-date" value="" placeholder="如 2024年3月16日" />
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="pane">
-            <div class="side-card">
-              <h3>必填检查 <span class="status-pill" id="req-status">待确认</span></h3>
-              <ul id="req-list">
-                <li data-req="org_mark"><span class="mark">○</span><span class="lab">发文机关标志</span><span class="hint-mini"></span></li>
-                <li data-req="doc_number"><span class="mark">○</span><span class="lab">发文字号</span><span class="hint-mini"></span></li>
-                <li data-req="title"><span class="mark">○</span><span class="lab">标题</span><span class="hint-mini"></span></li>
-                <li data-req="body"><span class="mark">○</span><span class="lab">正文</span><span class="hint-mini"></span></li>
-                <li data-req="org_signature"><span class="mark">○</span><span class="lab">发文机关署名</span><span class="hint-mini"></span></li>
-                <li data-req="date"><span class="mark">○</span><span class="lab">成文日期</span><span class="hint-mini"></span></li>
-                <li data-req="print"><span class="mark">○</span><span class="lab">印发机关 / 印发日期</span><span class="hint-mini"></span></li>
-                <li data-req="seal_mode"><span class="mark">○</span><span class="lab">落款版式</span><span class="hint-mini"></span></li>
-              </ul>
-            </div>
-            <div class="side-card">
-              <h3>版式推断 <span class="hint" id="layout-infer-note"></span></h3>
-              <ul id="layout-infer">
-                <li id="infer-dir">—</li>
-                <li id="infer-org">—</li>
-                <li id="infer-to">—</li>
-              </ul>
+          <div class="pane pane-preview">
+            <div class="office-preview-pane">
+              <div class="office-preview-toolbar">
+                <div class="hint">
+                  <span class="mini-spin" aria-hidden="true"></span>
+                  <span class="office-preview-status-text">后台预览 · 改完自动更新</span>
+                </div>
+                <button class="btn ghost btn-refresh-preview" type="button">刷新预览</button>
+              </div>
+              <div class="office-preview-scroll">
+                <div class="office-preview-pages">
+                  <div class="office-preview-empty is-wait">
+                    <strong>等待选择版式</strong><br />请先选择有章 / 无章版式
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -959,7 +1049,7 @@
             <div class="pane-head">
               <div>
                 <h1>正文结构</h1>
-                <p>按国标四层自动切分；失败则整段仿宋正文。左侧改层级，右侧「⋯」可移动或删除该段。</p>
+                <p>按国标四层切分；左侧改层级，右侧为实时预览。</p>
               </div>
               <div class="toolbar">
                 <span class="chip ok">已识别层次</span>
@@ -978,115 +1068,7 @@
             <div class="body-editor" id="body-editor" aria-label="正文结构编辑区">
               <div class="block selected" data-level="p">
                 <span class="tag p">正文</span>
-                <div class="block-text p" contenteditable="true">为进一步提升城市治理水平，现就有关事项通知如下：</div>
-                <div class="block-actions">
-                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
-                  <div class="more-menu" role="menu">
-                    <button type="button" data-act="up" role="menuitem">上移</button>
-                    <button type="button" data-act="down" role="menuitem">下移</button>
-                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
-                  </div>
-                </div>
-              </div>
-              <div class="block" data-level="h1">
-                <span class="tag h1">一级</span>
-                <div class="block-text h1" contenteditable="true">一、总体要求</div>
-                <div class="block-actions">
-                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
-                  <div class="more-menu" role="menu">
-                    <button type="button" data-act="up" role="menuitem">上移</button>
-                    <button type="button" data-act="down" role="menuitem">下移</button>
-                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
-                  </div>
-                </div>
-              </div>
-              <div class="block" data-level="p">
-                <span class="tag p">正文</span>
-                <div class="block-text p" contenteditable="true">坚持人民城市人民建、人民城市为人民，推动治理精细化、标准化、常态化。</div>
-                <div class="block-actions">
-                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
-                  <div class="more-menu" role="menu">
-                    <button type="button" data-act="up" role="menuitem">上移</button>
-                    <button type="button" data-act="down" role="menuitem">下移</button>
-                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
-                  </div>
-                </div>
-              </div>
-              <div class="block" data-level="h1">
-                <span class="tag h1">一级</span>
-                <div class="block-text h1" contenteditable="true">二、重点任务</div>
-                <div class="block-actions">
-                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
-                  <div class="more-menu" role="menu">
-                    <button type="button" data-act="up" role="menuitem">上移</button>
-                    <button type="button" data-act="down" role="menuitem">下移</button>
-                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
-                  </div>
-                </div>
-              </div>
-              <div class="block" data-level="h2">
-                <span class="tag h2">二级</span>
-                <div class="block-text h2" contenteditable="true">（一）市容环境整治</div>
-                <div class="block-actions">
-                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
-                  <div class="more-menu" role="menu">
-                    <button type="button" data-act="up" role="menuitem">上移</button>
-                    <button type="button" data-act="down" role="menuitem">下移</button>
-                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
-                  </div>
-                </div>
-              </div>
-              <div class="block" data-level="h3">
-                <span class="tag h3">三级</span>
-                <div class="block-text h3" contenteditable="true">1.加强背街小巷卫生长效管理，落实责任到人。</div>
-                <div class="block-actions">
-                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
-                  <div class="more-menu" role="menu">
-                    <button type="button" data-act="up" role="menuitem">上移</button>
-                    <button type="button" data-act="down" role="menuitem">下移</button>
-                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
-                  </div>
-                </div>
-              </div>
-              <div class="block" data-level="h3">
-                <span class="tag h3">三级</span>
-                <div class="block-text h3" contenteditable="true">2.规范占道经营清理标准，建立投诉闭环机制。</div>
-                <div class="block-actions">
-                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
-                  <div class="more-menu" role="menu">
-                    <button type="button" data-act="up" role="menuitem">上移</button>
-                    <button type="button" data-act="down" role="menuitem">下移</button>
-                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
-                  </div>
-                </div>
-              </div>
-              <div class="block" data-level="h2">
-                <span class="tag h2">二级</span>
-                <div class="block-text h2" contenteditable="true">（二）市政设施运维</div>
-                <div class="block-actions">
-                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
-                  <div class="more-menu" role="menu">
-                    <button type="button" data-act="up" role="menuitem">上移</button>
-                    <button type="button" data-act="down" role="menuitem">下移</button>
-                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
-                  </div>
-                </div>
-              </div>
-              <div class="block" data-level="h1">
-                <span class="tag h1">一级</span>
-                <div class="block-text h1" contenteditable="true">三、组织保障</div>
-                <div class="block-actions">
-                  <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
-                  <div class="more-menu" role="menu">
-                    <button type="button" data-act="up" role="menuitem">上移</button>
-                    <button type="button" data-act="down" role="menuitem">下移</button>
-                    <button type="button" data-act="delete" class="danger" role="menuitem">删除</button>
-                  </div>
-                </div>
-              </div>
-              <div class="block" data-level="p">
-                <span class="tag p">正文</span>
-                <div class="block-text p" contenteditable="true">各地各部门要压实责任，及时总结经验，重大问题按程序报告。</div>
+                <div class="block-text p" contenteditable="true"></div>
                 <div class="block-actions">
                   <button type="button" class="more-btn" aria-label="本段操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
                   <div class="more-menu" role="menu">
@@ -1099,23 +1081,22 @@
             </div>
           </div>
 
-          <div class="pane">
-            <div class="side-card">
-              <h3>字体作用范围</h3>
-              <ul>
-                <li>一级：整级黑体</li>
-                <li>二级：整级楷体</li>
-                <li>三级 / 四级：整级仿宋，不加粗</li>
-                <li>正文：3 号仿宋，首行缩进 2 字</li>
-              </ul>
-            </div>
-            <div class="side-card">
-              <h3>轻量工具边界</h3>
-              <ul>
-                <li>可设四级结构；「重排编号」按同级顺序接续</li>
-                <li>行末「⋯」：上移 / 下移 / 删除</li>
-                <li>不做表格、图片、复杂样式</li>
-              </ul>
+          <div class="pane pane-preview">
+            <div class="office-preview-pane">
+              <div class="office-preview-toolbar">
+                <div class="hint">
+                  <span class="mini-spin" aria-hidden="true"></span>
+                  <span class="office-preview-status-text">后台预览 · 改完自动更新</span>
+                </div>
+                <button class="btn ghost btn-refresh-preview" type="button">刷新预览</button>
+              </div>
+              <div class="office-preview-scroll">
+                <div class="office-preview-pages">
+                  <div class="office-preview-empty">
+                    <strong>尚无预览</strong><br />结构改动后将在后台刷新预览。
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -1159,38 +1140,26 @@
             </div>
           </div>
 
-          <div class="pane">
+          <div class="pane pane-preview">
             <div class="office-preview-pane">
               <div class="office-preview-toolbar">
-                <div class="hint" id="office-preview-status">
+                <div class="hint">
                   <span class="mini-spin" aria-hidden="true"></span>
-                  <span id="office-preview-status-text">仅在本步生成预览；未改动则用缓存，不挡编辑</span>
+                  <span class="office-preview-status-text">后台预览 · 未改动则用缓存</span>
                 </div>
-                <button class="btn ghost" type="button" id="btn-refresh-preview">刷新预览</button>
+                <button class="btn ghost btn-refresh-preview" type="button">刷新预览</button>
               </div>
-              <div class="office-preview-scroll" id="office-preview-scroll">
-                <div class="office-preview-pages" id="office-preview-pages">
-                  <div class="office-preview-empty" id="office-preview-empty">
-                    <strong>尚无预览</strong><br />补全必填并选择落款版式后，点「刷新预览」或进入本步自动生成。
+              <div class="office-preview-scroll">
+                <div class="office-preview-pages">
+                  <div class="office-preview-empty">
+                    <strong>尚无预览</strong><br />补全必填并选择落款版式后将自动生成。
                   </div>
                 </div>
               </div>
             </div>
           </div>
         </section>
-      </div>
-
-      <div class="footerbar">
-        <div class="footer-left">
-          <span id="step-label">步骤 1 / 4 · 导入文稿</span>
-          <span>·</span>
-          <span id="recognizer-label">识别：连接中…</span>
-        </div>
-        <div class="footer-right">
-          <button class="btn" type="button" id="btn-back" disabled>上一步</button>
-          <button class="btn primary" type="button" id="btn-next">开始识别</button>
-        </div>
-      </div>
+    </div>
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -1203,36 +1172,6 @@
   </div>
 
   <script>
-    const SAMPLE = `××市人民政府文件
-
-×政发〔2024〕12号
-
-关于进一步加强城市精细化管理工作的通知
-
-各区县人民政府，市政府各部门、各直属机构：
-
-为进一步提升城市治理水平，现就有关事项通知如下：
-
-一、总体要求
-坚持人民城市人民建、人民城市为人民，推动治理精细化、标准化、常态化。
-
-二、重点任务
-（一）市容环境整治
-1.加强背街小巷卫生长效管理，落实责任到人。
-2. 规范占道经营清理标准，建立投诉闭环机制。
-（二）市政设施运维
-完善巡查养护机制，提高设施完好率。
-
-三、组织保障
-各地各部门要压实责任，及时总结经验，重大问题按程序报告。
-
-附件：城市精细化管理重点任务清单
-
-××市人民政府
-2024年3月15日
-
-××市人民政府办公室　　　　　　2024年3月16日印发`;
-
     const labels = ["导入文稿", "确认要素", "正文结构", "生成导出"];
     const nextLabels = ["开始识别", "下一步", "下一步", "生成 docx"];
     let step = 1;
@@ -1277,14 +1216,15 @@
       btnBack.disabled = step === 1;
       btnNext.textContent = nextLabels[step - 1];
       if (step === 2 || step === 4) refreshExportGate();
-      if (step === 3) refreshRequiredChecklist();
-      // 仅第 4 步才跑 Office 预览，避免第 2/3 步编辑卡顿
-      if (step === 4) refreshOfficePreview({ silent: true });
+      if (step === 2 || step === 3) refreshRequiredChecklist();
+      // 第 2/3/4 步右侧预览：有缓存秒开，有改动则后台静默刷新
+      if (step >= 2) refreshOfficePreview({ silent: true });
     }
 
     let previewing = false;
     let previewGen = 0;
     let previewPendingFp = null;
+    let previewTimer = null;
     let lastPreviewHash = "";
     let lastPreviewPages = null;
     let lastPreviewMeta = null;
@@ -1304,36 +1244,109 @@
     }
 
     function setPreviewUpdating(on) {
-      document.querySelector(".office-preview-pane")?.classList.toggle("is-updating", !!on);
+      document.querySelectorAll(".office-preview-pane").forEach((el) => {
+        el.classList.toggle("is-updating", !!on);
+      });
     }
 
     function setPreviewStatus(text) {
-      const el = document.getElementById("office-preview-status-text");
-      if (el) el.textContent = text;
+      document.querySelectorAll(".office-preview-status-text").forEach((el) => {
+        el.textContent = text;
+      });
+    }
+
+    function renderOfficePreviewEmpty(kind, title, detail) {
+      const wraps = document.querySelectorAll(".office-preview-pages");
+      const cls = kind === "error" ? "is-error" : (kind === "loading" ? "is-loading" : "is-wait");
+      wraps.forEach((wrap) => {
+        wrap.classList.remove("is-stale");
+        wrap.innerHTML = `<div class="office-preview-empty ${cls}"><strong>${title}</strong><br />${detail}</div>`;
+      });
+      setPreviewStatus(detail || title);
     }
 
     function renderOfficePreviewPages(pages, meta) {
-      const wrap = document.getElementById("office-preview-pages");
-      if (!wrap) return;
-      wrap.classList.toggle("is-stale", !!(meta && meta.stale));
-      wrap.innerHTML = "";
+      const wraps = document.querySelectorAll(".office-preview-pages");
+      if (!wraps.length) return;
+      const stale = !!(meta && meta.stale);
       if (!pages || !pages.length) {
-        wrap.innerHTML = `<div class="office-preview-empty"><strong>预览失败</strong><br />${(meta && meta.error) || "未生成页面"}</div>`;
-        setPreviewStatus((meta && meta.error) || "预览失败");
+        const kind = (meta && meta.kind) || "error";
+        const title = (meta && meta.title) || (kind === "error" ? "预览失败" : "暂无预览");
+        const detail = (meta && (meta.detail || meta.error)) || "未生成页面";
+        renderOfficePreviewEmpty(kind, title, detail);
         return;
       }
-      pages.forEach((src, i) => {
-        const img = document.createElement("img");
-        img.src = src;
-        img.alt = `预览第 ${i + 1} 页`;
-        wrap.appendChild(img);
+      wraps.forEach((wrap) => {
+        wrap.classList.toggle("is-stale", stale);
+        wrap.innerHTML = "";
+        pages.forEach((src, i) => {
+          const img = document.createElement("img");
+          img.src = src;
+          img.alt = `预览第 ${i + 1} 页`;
+          wrap.appendChild(img);
+        });
       });
       const eng = (meta && meta.engine) ? String(meta.engine).toUpperCase() : "Office";
-      if (meta && meta.stale) {
+      if (stale) {
         setPreviewStatus(`${eng} 预览 · 显示上次结果，正在后台更新…`);
       } else {
-        setPreviewStatus(`${eng} 预览 · ${pages.length} 页（接近一比一）`);
+        setPreviewStatus(`${eng} 预览 · ${pages.length} 页`);
       }
+    }
+
+    function syncPreviewPlaceholder() {
+      if (step < 2) return;
+      if (lastPreviewPages && lastPreviewPages.length) return;
+      if (previewing) {
+        renderOfficePreviewEmpty("loading", "正在生成预览", "已选版式，后台排版中…");
+        return;
+      }
+      if (!sealMode) {
+        renderOfficePreviewEmpty("wait", "等待选择版式", "请先选择有章 / 无章版式");
+        return;
+      }
+      renderOfficePreviewEmpty("wait", "暂无预览", "停手或离开输入框后将自动生成");
+    }
+
+    function markPreviewPending() {
+      if (step < 2 || !sealMode) {
+        syncPreviewPlaceholder();
+        return;
+      }
+      // 打字中不踢预览：有旧图继续看，只改状态文案
+      if (lastPreviewPages && lastPreviewPages.length) {
+        setPreviewStatus("有改动 · 离开输入框或停手后更新");
+        return;
+      }
+      syncPreviewPlaceholder();
+    }
+
+    function scheduleOfficePreviewIdle() {
+      if (step < 2) return;
+      if (!sealMode) {
+        syncPreviewPlaceholder();
+        return;
+      }
+      markPreviewPending();
+      clearTimeout(previewTimer);
+      previewTimer = setTimeout(() => {
+        refreshOfficePreview({ silent: true });
+      }, 2000);
+    }
+
+    function requestOfficePreview(opts = {}) {
+      if (step < 2) return;
+      if (!sealMode) {
+        syncPreviewPlaceholder();
+        return;
+      }
+      clearTimeout(previewTimer);
+      refreshOfficePreview({ silent: true, force: !!opts.force });
+    }
+
+    // 兼容旧调用名：离散操作走立即刷新
+    function scheduleOfficePreview() {
+      requestOfficePreview();
     }
 
     async function refreshOfficePreview(opts = {}) {
@@ -1345,7 +1358,7 @@
         lastPreviewHash = "";
         lastPreviewPages = null;
         lastPreviewMeta = null;
-        renderOfficePreviewPages([], { error: "请先选择有章 / 无章版式" });
+        renderOfficePreviewEmpty("wait", "等待选择版式", "请先选择有章 / 无章版式");
         return;
       }
 
@@ -1358,9 +1371,11 @@
         return;
       }
 
-      // 有旧图先继续显示，避免白屏 + 全屏遮罩
+      // 有旧图先继续显示；无图则立刻切到「生成中」，避免一直停在旧提示
       if (lastPreviewPages && lastPreviewPages.length) {
         renderOfficePreviewPages(lastPreviewPages, { ...(lastPreviewMeta || {}), stale: true });
+      } else {
+        renderOfficePreviewEmpty("loading", "正在生成预览", "已选版式，后台排版中…");
       }
 
       if (previewing) {
@@ -1397,7 +1412,7 @@
       } catch (err) {
         if (myGen !== previewGen) return;
         if (!(lastPreviewPages && lastPreviewPages.length)) {
-          renderOfficePreviewPages([], { error: String(err.message || err) });
+          renderOfficePreviewEmpty("error", "预览失败", String(err.message || err));
         } else {
           setPreviewStatus("更新失败，仍显示上次预览：" + String(err.message || err));
         }
@@ -1440,59 +1455,85 @@
       };
     }
 
-    function setReqItem(key, ok, emptyHint) {
-      const li = document.querySelector(`#req-list li[data-req="${key}"]`);
-      if (!li) return;
-      const mark = li.querySelector(".mark");
-      const hint = li.querySelector(".hint-mini");
-      li.classList.toggle("is-ok", ok);
-      li.classList.toggle("is-missing", !ok);
-      if (mark) mark.textContent = ok ? "✓" : "!";
-      if (hint) hint.textContent = ok ? "已填" : (emptyHint || "未填");
+    const MISSING_REQ_ITEMS = [
+      { key: "seal_mode", label: "落款版式", target: "#section-seal", focus: null, check: (st) => !st.seal_mode },
+      { key: "org_mark", label: "发文机关标志", target: '[data-req-key="org_mark"]', focus: "#f-org", check: (st) => !st.org_mark },
+      { key: "doc_number", label: "发文字号", target: '[data-req-key="doc_number"]', focus: "#f-docno", check: (st) => !st.doc_number },
+      { key: "title", label: "标题", target: '[data-req-key="title"]', focus: "#f-title", check: (st) => !st.title },
+      { key: "org_signature", label: "发文机关署名", target: '[data-req-key="org_signature"]', focus: "#f-orgsig", check: (st) => !st.org_signature },
+      { key: "date", label: "成文日期", target: '[data-req-key="date"]', focus: "#f-date", check: (st) => !st.date },
+      { key: "print_org", label: "印发机关", target: '[data-req-key="print_org"]', focus: "#f-print-org", check: () => !fieldVal("f-print-org") },
+      { key: "print_date", label: "印发日期", target: '[data-req-key="print_date"]', focus: "#f-print-date", check: () => !fieldVal("f-print-date") },
+    ];
+
+    function jumpToMissingTarget(item) {
+      const wrap = document.querySelector(item.target);
+      if (wrap) {
+        wrap.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      if (item.focus) {
+        const input = document.querySelector(item.focus);
+        if (input && !input.disabled) {
+          input.focus({ preventScroll: true });
+          return;
+        }
+      }
+      if (item.key === "seal_mode") {
+        document.querySelector(".seal-option")?.focus({ preventScroll: true });
+      }
+    }
+
+    function renderMissingRequiredNav() {
+      const section = document.getElementById("missing-required-section");
+      const nav = document.getElementById("missing-required-nav");
+      if (!section || !nav) return;
+
+      const st = requiredState();
+      document.querySelectorAll(".field.is-missing-field, #section-seal.is-missing-field").forEach((el) => {
+        el.classList.remove("is-missing-field");
+      });
+
+      const missing = MISSING_REQ_ITEMS.filter((item) => item.check(st));
+      nav.innerHTML = "";
+      missing.forEach((item) => {
+        const wrap = document.querySelector(item.target);
+        wrap?.classList.add("is-missing-field");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.setAttribute("role", "listitem");
+        btn.textContent = item.label;
+        btn.addEventListener("click", () => jumpToMissingTarget(item));
+        nav.appendChild(btn);
+      });
+      section.hidden = missing.length === 0;
     }
 
     function refreshRequiredChecklist() {
       const st = requiredState();
-      setReqItem("org_mark", st.org_mark);
-      setReqItem("doc_number", st.doc_number);
-      setReqItem("title", st.title);
-      setReqItem("body", st.body, "请到正文结构确认");
-      setReqItem("org_signature", st.org_signature);
-      setReqItem("date", st.date);
-      setReqItem("print", st.print, "机关或日期空");
-      setReqItem("seal_mode", st.seal_mode, "未选择");
-
       const missing = Object.values(st).filter((v) => !v).length;
-      if (missing === 0) {
-        reqStatus.textContent = "可导出";
-        reqStatus.classList.add("ok");
-      } else {
-        reqStatus.textContent = `缺 ${missing} 项`;
-        reqStatus.classList.remove("ok");
+      if (reqStatus) {
+        if (missing === 0) {
+          reqStatus.textContent = "必填齐全";
+          reqStatus.classList.add("ok");
+          reqStatus.classList.remove("warn");
+        } else {
+          reqStatus.textContent = `缺 ${missing} 项`;
+          reqStatus.classList.remove("ok");
+          reqStatus.classList.add("warn");
+        }
       }
-
-      // 版式推断也跟着变
-      const signers = fieldVal("f-signers");
-      const org = fieldVal("f-org");
-      const toFooter = document.getElementById("f-to-footer")?.getAttribute("aria-pressed") === "true";
-      const inferDir = document.getElementById("infer-dir");
-      const inferOrg = document.getElementById("infer-org");
-      const inferTo = document.getElementById("infer-to");
-      if (inferDir) inferDir.textContent = signers ? "有签发人 → 上行文版式" : "签发人为空 → 按下行文处理";
-      if (inferOrg) {
-        const parts = org.split(/[、，,；;]/).map((s) => s.trim()).filter(Boolean);
-        inferOrg.textContent = parts.length > 1 ? `联合红头（${parts.length} 个机关）` : (org ? "单一机关红头" : "尚未填写发文机关标志");
-      }
-      if (inferTo) {
-        const rec = fieldVal("f-to");
-        if (!rec) inferTo.textContent = "主送为空（或已点无此项）";
-        else inferTo.textContent = toFooter ? "主送排在版记" : "主送在标题下";
-      }
+      renderMissingRequiredNav();
+      syncPreviewPlaceholder();
     }
 
     function refreshExportGate() {
       refreshRequiredChecklist();
       const ok = Boolean(sealMode);
+      const confirmAlert = document.getElementById("confirm-alert");
+      if (confirmAlert) {
+        confirmAlert.hidden = ok;
+        if (ok) confirmAlert.classList.remove("error");
+      }
       exportAlert.style.display = ok ? "none" : "flex";
       document.getElementById("export-alert-text").textContent = ok
         ? ""
@@ -1729,7 +1770,7 @@
         return;
       }
       if (![...rawText.value].length) {
-        showToast("请先粘贴文本或载入样例");
+        showToast("请先粘贴或导入公文文本");
         return;
       }
       setRecognizing(true, "识别中，请稍候", "复杂文稿或脏换行可能稍慢，请勿重复点击");
@@ -1788,12 +1829,6 @@
       }
       if (step === 3) { setStep(4); return; }
       if (step === 4) { doExport(); }
-    });
-
-    document.getElementById("btn-load-sample").addEventListener("click", () => {
-      rawText.value = SAMPLE;
-      updateCharCount();
-      showToast("已载入下行文样例");
     });
 
     rawText.addEventListener("input", updateCharCount);
@@ -1896,8 +1931,15 @@
           b.classList.toggle("selected", on);
           b.setAttribute("aria-checked", on ? "true" : "false");
         });
-        document.getElementById("confirm-alert").classList.remove("error");
+        const alertEl = document.getElementById("confirm-alert");
+        if (alertEl) {
+          alertEl.classList.remove("error");
+          alertEl.hidden = true;
+        }
         refreshExportGate();
+        // 选完版式立刻生成预览
+        renderOfficePreviewEmpty("loading", "正在生成预览", "已选版式，后台排版中…");
+        requestOfficePreview({ force: true });
         showToast(sealMode === "stamp_layout" ? "已选：有章版式" : "已选：无章版式");
       });
     });
@@ -1915,6 +1957,7 @@
           else input.focus();
         }
         refreshRequiredChecklist();
+        requestOfficePreview();
       });
     });
 
@@ -1923,16 +1966,25 @@
       const on = btn.getAttribute("aria-pressed") !== "true";
       btn.setAttribute("aria-pressed", on ? "true" : "false");
       refreshRequiredChecklist();
+      requestOfficePreview();
     });
 
     ["f-org", "f-docno", "f-title", "f-orgsig", "f-date", "f-print-org", "f-print-date", "f-signers", "f-to", "f-attach", "f-cc", "f-note", "f-secret", "f-urgency", "f-copy"].forEach((id) => {
-      document.getElementById(id)?.addEventListener("input", () => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("input", () => {
         refreshRequiredChecklist();
+        scheduleOfficePreviewIdle();
+      });
+      el.addEventListener("blur", () => {
+        requestOfficePreview();
       });
     });
 
-    document.getElementById("btn-refresh-preview")?.addEventListener("click", () => {
-      refreshOfficePreview({ silent: false, force: true });
+    document.querySelectorAll(".btn-refresh-preview").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        refreshOfficePreview({ silent: false, force: true });
+      });
     });
     const bodyEditor = document.getElementById("body-editor");
     const CN = "一二三四五六七八九十";
@@ -1964,6 +2016,12 @@
       const textEl = e.target.closest?.(".block-text");
       if (textEl) explodeHtmlBreaks(textEl.closest(".block"));
       refreshRequiredChecklist();
+      scheduleOfficePreviewIdle();
+    });
+
+    bodyEditor.addEventListener("focusout", (e) => {
+      if (bodyEditor.contains(e.relatedTarget)) return;
+      requestOfficePreview();
     });
 
     // Enter：光标处拆成两块；块首 Backspace：并入上一段
@@ -1985,6 +2043,7 @@
         selectedBlock = newBlock;
         setCaretTextOffset(newBlock.querySelector(".block-text"), 0);
         refreshRequiredChecklist();
+        scheduleOfficePreviewIdle();
         return;
       }
 
@@ -2005,6 +2064,7 @@
         selectedBlock = prev;
         setCaretTextOffset(prevText, joinAt);
         refreshRequiredChecklist();
+        requestOfficePreview();
       }
     });
 
@@ -2074,9 +2134,11 @@
         if (act === "up" && block.previousElementSibling) {
           block.parentNode.insertBefore(block, block.previousElementSibling);
           showToast("已上移");
+          requestOfficePreview();
         } else if (act === "down" && block.nextElementSibling) {
           block.parentNode.insertBefore(block.nextElementSibling, block);
           showToast("已下移");
+          requestOfficePreview();
         } else if (act === "delete") {
           if (bodyEditor.querySelectorAll(".block").length <= 1) {
             showToast("至少保留一段");
@@ -2087,6 +2149,8 @@
           selectedBlock = next;
           next?.classList.add("selected");
           showToast("已删除");
+          refreshRequiredChecklist();
+          requestOfficePreview();
         }
         return;
       }
@@ -2114,12 +2178,14 @@
         tag.textContent = ({ h1: "一级", h2: "二级", h3: "三级", h4: "四级", p: "正文" })[level];
         text.className = "block-text " + level;
         showToast("已设为 " + tag.textContent);
+        requestOfficePreview();
       });
     });
 
     document.getElementById("btn-renumber").addEventListener("click", () => {
       renumberBlocks();
       showToast("已按同级顺序重排编号");
+      requestOfficePreview();
     });
 
     document.getElementById("btn-export").addEventListener("click", () => {
