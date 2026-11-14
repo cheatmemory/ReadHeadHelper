@@ -548,59 +548,51 @@
     .more-menu button:hover { background: #f3f6fb; }
     .more-menu button.danger { color: var(--red); }
 
-    /* Export / preview */
-    .doc-sheet {
-      width: min(100%, 420px);
-      margin: 0 auto;
-      aspect-ratio: 210 / 297;
+    /* Export / Office 一比一预览 */
+    .office-preview-pane {
+      display: flex; flex-direction: column; gap: 10px; min-height: 0; height: 100%;
+    }
+    .office-preview-toolbar {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      flex: 0 0 auto;
+    }
+    .office-preview-toolbar .hint {
+      font-size: 12px; color: var(--muted); line-height: 1.4;
+      display: flex; align-items: center; gap: 8px; min-width: 0;
+    }
+    .office-preview-toolbar .hint .mini-spin {
+      width: 12px; height: 12px; flex: 0 0 auto;
+      border-radius: 50%;
+      border: 2px solid #d5dae6;
+      border-top-color: var(--accent, #2f6fed);
+      animation: busy-spin 0.8s linear infinite;
+      display: none;
+    }
+    .office-preview-pane.is-updating .office-preview-toolbar .hint .mini-spin {
+      display: inline-block;
+    }
+    .office-preview-pages.is-stale img {
+      opacity: 0.72;
+      filter: grayscale(0.08);
+    }
+    .office-preview-scroll {
+      flex: 1 1 auto; min-height: 280px; overflow: auto;
+      background: #e8ebf1; border: 1px solid var(--line);
+      border-radius: var(--radius); padding: 14px 12px;
+    }
+    .office-preview-pages {
+      display: flex; flex-direction: column; align-items: center; gap: 14px;
+    }
+    .office-preview-pages img {
+      width: min(100%, 520px);
       background: #fff;
-      border: 1px solid var(--line-strong);
-      box-shadow: 0 10px 30px rgba(22,32,51,0.08);
-      padding: 8% 9% 10%;
-      position: relative;
-      font-family: var(--font-doc);
-      color: #111;
-      overflow: hidden;
+      box-shadow: 0 8px 28px rgba(22, 32, 51, 0.14);
+      border: 1px solid #d7dbe5;
     }
-    .doc-sheet::before {
-      content: "";
-      position: absolute; inset: 7.5% 8.5%;
-      border: 1px dashed #e5e8ef; pointer-events: none;
+    .office-preview-empty {
+      margin: 48px 16px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.6;
     }
-    .doc-org {
-      text-align: center; color: var(--red);
-      font-size: 22px; font-weight: 700; letter-spacing: 0.12em;
-      margin-top: 18%; line-height: 1.2;
-    }
-    .doc-no {
-      text-align: center; font-size: 11px; margin-top: 10%;
-      font-family: var(--font-ui);
-    }
-    .doc-line {
-      height: 2px; background: var(--red); margin: 4% 0 8%;
-    }
-    .doc-title {
-      text-align: center; font-size: 14px; font-weight: 700;
-      line-height: 1.45; margin-bottom: 6%;
-    }
-    .doc-to {
-      font-size: 11px; margin-bottom: 4%; font-family: var(--font-ui);
-    }
-    .doc-body {
-      font-size: 11px; line-height: 1.85; text-indent: 2em;
-      font-family: var(--font-ui);
-    }
-    .doc-sign {
-      margin-top: 10%; text-align: right; font-size: 11px;
-      line-height: 1.8; font-family: var(--font-ui);
-      padding-right: 12%;
-    }
-    .doc-footer {
-      position: absolute; left: 9%; right: 9%; bottom: 7%;
-      border-top: 2px solid #333; padding-top: 4px;
-      font-size: 10px; color: #333; font-family: var(--font-ui);
-      display: flex; justify-content: space-between;
-    }
+    .office-preview-empty strong { color: var(--ink-soft); font-weight: 600; }
 
     .export-actions {
       display: grid; gap: 10px; margin-top: 16px;
@@ -687,7 +679,7 @@
       .main { grid-template-columns: 1fr; }
       .pane + .pane { border-left: 0; border-top: 1px solid var(--line); }
       .grid-2, .seal-group { grid-template-columns: 1fr; }
-      .doc-sheet { width: 100%; }
+      .office-preview-pages img { width: 100%; }
       .topbar, .pane, .footerbar { padding-left: 14px; padding-right: 14px; }
     }
     @media (max-width: 720px) {
@@ -1134,7 +1126,7 @@
             <div class="pane-head">
               <div>
                 <h1>生成导出</h1>
-                <p>按 LayoutIR 生成符合国标数值的 docx。预览仅为示意比例，最终以 WPS 打开验收为准。</p>
+                <p>按 LayoutIR 生成 docx；右侧为 WPS/Word 渲染的接近一比一预览。</p>
               </div>
             </div>
 
@@ -1168,20 +1160,20 @@
           </div>
 
           <div class="pane">
-            <div class="doc-sheet" aria-hidden="true">
-              <div class="doc-org" id="preview-org">××市人民政府</div>
-              <div class="doc-no" id="preview-no">×政发〔2024〕12号</div>
-              <div class="doc-line"></div>
-              <div class="doc-title" id="preview-title">关于进一步加强城市精细化管理工作的通知</div>
-              <div class="doc-to" id="preview-to">各区县人民政府，市政府各部门、各直属机构：</div>
-              <div class="doc-body">为进一步提升城市治理水平，现就有关事项通知如下：一、总体要求……（示意）</div>
-              <div class="doc-sign">
-                <div id="preview-sig">××市人民政府</div>
-                <div id="preview-date">2024年3月15日</div>
+            <div class="office-preview-pane">
+              <div class="office-preview-toolbar">
+                <div class="hint" id="office-preview-status">
+                  <span class="mini-spin" aria-hidden="true"></span>
+                  <span id="office-preview-status-text">仅在本步生成预览；未改动则用缓存，不挡编辑</span>
+                </div>
+                <button class="btn ghost" type="button" id="btn-refresh-preview">刷新预览</button>
               </div>
-              <div class="doc-footer">
-                <span id="preview-print-org">××市人民政府办公室</span>
-                <span id="preview-print-date">2024年3月16日印发</span>
+              <div class="office-preview-scroll" id="office-preview-scroll">
+                <div class="office-preview-pages" id="office-preview-pages">
+                  <div class="office-preview-empty" id="office-preview-empty">
+                    <strong>尚无预览</strong><br />补全必填并选择落款版式后，点「刷新预览」或进入本步自动生成。
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1271,6 +1263,7 @@
     }
 
     function setStep(n) {
+      const prev = step;
       step = Math.max(1, Math.min(4, n));
       document.querySelectorAll(".step").forEach((el) => {
         const s = Number(el.dataset.step);
@@ -1285,27 +1278,142 @@
       btnNext.textContent = nextLabels[step - 1];
       if (step === 2 || step === 4) refreshExportGate();
       if (step === 3) refreshRequiredChecklist();
-      syncPreview();
+      // 仅第 4 步才跑 Office 预览，避免第 2/3 步编辑卡顿
+      if (step === 4) refreshOfficePreview({ silent: true });
     }
 
-    function syncPreview() {
-      const map = [
-        ["f-org", "preview-org"],
-        ["f-docno", "preview-no"],
-        ["f-title", "preview-title"],
-        ["f-to", "preview-to"],
-        ["f-orgsig", "preview-sig"],
-        ["f-date", "preview-date"],
-        ["f-print-org", "preview-print-org"],
-      ];
-      map.forEach(([src, dst]) => {
-        const a = document.getElementById(src);
-        const b = document.getElementById(dst);
-        if (a && b) b.textContent = a.value || "—";
+    let previewing = false;
+    let previewGen = 0;
+    let previewPendingFp = null;
+    let lastPreviewHash = "";
+    let lastPreviewPages = null;
+    let lastPreviewMeta = null;
+    const previewWaiters = [];
+
+    function previewFingerprint() {
+      return JSON.stringify(collectPayload());
+    }
+
+    function resolvePreviewWaiters(data) {
+      const waiters = previewWaiters.splice(0, previewWaiters.length);
+      waiters.forEach((fn) => fn(data));
+    }
+
+    function waitPreviewFinished() {
+      return new Promise((resolve) => previewWaiters.push(resolve));
+    }
+
+    function setPreviewUpdating(on) {
+      document.querySelector(".office-preview-pane")?.classList.toggle("is-updating", !!on);
+    }
+
+    function setPreviewStatus(text) {
+      const el = document.getElementById("office-preview-status-text");
+      if (el) el.textContent = text;
+    }
+
+    function renderOfficePreviewPages(pages, meta) {
+      const wrap = document.getElementById("office-preview-pages");
+      if (!wrap) return;
+      wrap.classList.toggle("is-stale", !!(meta && meta.stale));
+      wrap.innerHTML = "";
+      if (!pages || !pages.length) {
+        wrap.innerHTML = `<div class="office-preview-empty"><strong>预览失败</strong><br />${(meta && meta.error) || "未生成页面"}</div>`;
+        setPreviewStatus((meta && meta.error) || "预览失败");
+        return;
+      }
+      pages.forEach((src, i) => {
+        const img = document.createElement("img");
+        img.src = src;
+        img.alt = `预览第 ${i + 1} 页`;
+        wrap.appendChild(img);
       });
-      const pd = document.getElementById("f-print-date");
-      const pdv = document.getElementById("preview-print-date");
-      if (pd && pdv) pdv.textContent = (pd.value || "—") + "印发";
+      const eng = (meta && meta.engine) ? String(meta.engine).toUpperCase() : "Office";
+      if (meta && meta.stale) {
+        setPreviewStatus(`${eng} 预览 · 显示上次结果，正在后台更新…`);
+      } else {
+        setPreviewStatus(`${eng} 预览 · ${pages.length} 页（接近一比一）`);
+      }
+    }
+
+    async function refreshOfficePreview(opts = {}) {
+      const silent = opts.silent !== false;
+      const force = !!opts.force;
+      if (recognizing) return;
+
+      if (!sealMode) {
+        lastPreviewHash = "";
+        lastPreviewPages = null;
+        lastPreviewMeta = null;
+        renderOfficePreviewPages([], { error: "请先选择有章 / 无章版式" });
+        return;
+      }
+
+      const fp = previewFingerprint();
+      if (!force && fp === lastPreviewHash && lastPreviewPages && lastPreviewPages.length) {
+        renderOfficePreviewPages(lastPreviewPages, lastPreviewMeta);
+        setPreviewStatus(
+          `${String((lastPreviewMeta && lastPreviewMeta.engine) || "office").toUpperCase()} 预览 · 已是最新`
+        );
+        return;
+      }
+
+      // 有旧图先继续显示，避免白屏 + 全屏遮罩
+      if (lastPreviewPages && lastPreviewPages.length) {
+        renderOfficePreviewPages(lastPreviewPages, { ...(lastPreviewMeta || {}), stale: true });
+      }
+
+      if (previewing) {
+        previewPendingFp = fp;
+        setPreviewStatus("预览排队更新中…");
+        setPreviewUpdating(true);
+        return;
+      }
+
+      const myGen = ++previewGen;
+      previewing = true;
+      previewPendingFp = null;
+      setPreviewUpdating(true);
+      setPreviewStatus("正在后台更新预览…");
+
+      try {
+        let data;
+        if (backend && typeof backend.startPreview === "function") {
+          const started = await callBackend("startPreview", JSON.stringify(collectPayload()));
+          if (!started.ok) throw new Error(started.error || "无法开始预览");
+          data = await waitPreviewFinished();
+        } else {
+          throw new Error("后端未连接，无法生成 Office 预览");
+        }
+        if (myGen !== previewGen) return;
+        if (!data || !data.ok) throw new Error((data && data.error) || "预览失败");
+        lastPreviewHash = fp;
+        lastPreviewPages = data.pages || [];
+        lastPreviewMeta = data;
+        renderOfficePreviewPages(lastPreviewPages, data);
+        if (!silent) {
+          showToast("预览已更新（" + String(data.engine || "office").toUpperCase() + "）");
+        }
+      } catch (err) {
+        if (myGen !== previewGen) return;
+        if (!(lastPreviewPages && lastPreviewPages.length)) {
+          renderOfficePreviewPages([], { error: String(err.message || err) });
+        } else {
+          setPreviewStatus("更新失败，仍显示上次预览：" + String(err.message || err));
+        }
+        if (!silent) showToast(String(err.message || err));
+      } finally {
+        if (myGen === previewGen) {
+          previewing = false;
+          setPreviewUpdating(false);
+          if (previewPendingFp && previewPendingFp !== lastPreviewHash) {
+            previewPendingFp = null;
+            refreshOfficePreview({ silent: true, force: true });
+          } else {
+            previewPendingFp = null;
+          }
+        }
+      }
     }
 
     function fieldVal(id) {
@@ -1440,7 +1548,6 @@
       setFieldValue("f-print-org", f.print_org, false);
       setFieldValue("f-print-date", f.print_date, false);
       renderBodyTree(data.body_tree || []);
-      syncPreview();
       refreshRequiredChecklist();
     }
 
@@ -1818,11 +1925,14 @@
       refreshRequiredChecklist();
     });
 
-    ["f-org", "f-docno", "f-title", "f-orgsig", "f-date", "f-print-org", "f-print-date", "f-signers", "f-to"].forEach((id) => {
+    ["f-org", "f-docno", "f-title", "f-orgsig", "f-date", "f-print-org", "f-print-date", "f-signers", "f-to", "f-attach", "f-cc", "f-note", "f-secret", "f-urgency", "f-copy"].forEach((id) => {
       document.getElementById(id)?.addEventListener("input", () => {
         refreshRequiredChecklist();
-        syncPreview();
       });
+    });
+
+    document.getElementById("btn-refresh-preview")?.addEventListener("click", () => {
+      refreshOfficePreview({ silent: false, force: true });
     });
     const bodyEditor = document.getElementById("body-editor");
     const CN = "一二三四五六七八九十";
@@ -2043,6 +2153,15 @@
               resolveRecognizeWaiters(typeof raw === "string" ? JSON.parse(raw) : raw);
             } catch (e) {
               resolveRecognizeWaiters({ ok: false, error: String(e.message || e) });
+            }
+          });
+        }
+        if (backend.previewFinished && backend.previewFinished.connect) {
+          backend.previewFinished.connect((raw) => {
+            try {
+              resolvePreviewWaiters(typeof raw === "string" ? JSON.parse(raw) : raw);
+            } catch (e) {
+              resolvePreviewWaiters({ ok: false, error: String(e.message || e) });
             }
           });
         }

@@ -145,8 +145,12 @@ def test_banji_floating_table_gbt_7_4(tmp_path):
     assert borders.find(W + "bottom").get(W + "val") == "single"
     assert borders.find(W + "insideH").get(W + "val") == "single"
     assert borders.find(W + "top").get(W + "sz") == str(U.BANJI_LINE_THICK_SZ)
+    assert borders.find(W + "bottom").get(W + "sz") == str(U.BANJI_LINE_THICK_SZ)
     assert borders.find(W + "insideH").get(W + "sz") == str(U.BANJI_LINE_THIN_SZ)
     assert int(borders.find(W + "top").get(W + "sz")) > int(
+        borders.find(W + "insideH").get(W + "sz")
+    )
+    assert int(borders.find(W + "bottom").get(W + "sz")) > int(
         borders.find(W + "insideH").get(W + "sz")
     )
 

@@ -18,8 +18,9 @@ from app.session import AppSession
 from core.body_structure.parser import renumber_blocks
 from core.config_loader import load_config, project_root
 from core.ir.builder import split_names
-from core.ir.schema import BodyBlock, ModelOutput, SealMode
+from core.ir.schema import BodyBlock, LayoutIR, ModelOutput, SealMode
 from core.layout import DocxEngine
+from core.layout.office_preview import render_docx_preview
 from core.recognize import create_recognizer
 from core.text_extract import extract_text_from_docx
 
@@ -28,6 +29,7 @@ class BackendBridge(QObject):
     statusChanged = Signal(str)
     toast = Signal(str)
     recognizeFinished = Signal(str)  # JSON：识别结束（成功/失败），供前端异步接收
+    previewFinished = Signal(str)  # JSON：Office 一比一预览页图
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -39,6 +41,10 @@ class BackendBridge(QObject):
         self._recog_busy = False
         self._recog_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="recognize")
         self._recog_future = None
+        self._preview_busy = False
+        self._preview_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="preview")
+        self._preview_future = None
+        self._preview_tmpdir: str | None = None
 
     def _ensure_recognizer(self):
         if self.recognizer is not None:
@@ -246,6 +252,83 @@ class BackendBridge(QObject):
             return json.dumps({"ok": True, "path": path}, ensure_ascii=False)
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    @staticmethod
+    def _preview_job(ir_data: dict, tmp_dir: str) -> dict:
+        """后台线程：写 docx + Office 渲页图（勿在主线程做）。"""
+        seal = ir_data.get("seal_mode")
+        body = [BodyBlock.from_dict(x) for x in (ir_data.get("body_tree") or [])]
+        skip = {"seal_mode", "body_tree"}
+        kwargs = {
+            k: v
+            for k, v in ir_data.items()
+            if k in LayoutIR.__dataclass_fields__ and k not in skip
+        }
+        ir = LayoutIR(**kwargs)
+        ir.seal_mode = SealMode(seal) if seal else None
+        ir.body_tree = body
+        docx_path = Path(tmp_dir) / "preview.docx"
+        DocxEngine().render(ir, docx_path)
+        return render_docx_preview(docx_path, max_pages=3, zoom=1.6)
+
+    @Slot(str, result=str)
+    def startPreview(self, payload_json: str) -> str:
+        """立即返回；docx 渲染与 WPS/Word 预览均在后台线程完成。"""
+        if self._preview_busy:
+            return json.dumps({"ok": False, "error": "预览生成中，请稍候"}, ensure_ascii=False)
+        try:
+            data = json.loads(payload_json or "{}")
+            self._apply_payload(data)
+            missing = self.session.ir.missing_required()
+            if missing:
+                return json.dumps(
+                    {"ok": False, "error": "缺少：" + "、".join(missing)},
+                    ensure_ascii=False,
+                )
+
+            tmp_dir = Path(tempfile.mkdtemp(prefix="govdoc_prev_"))
+            self._preview_tmpdir = str(tmp_dir)
+            ir_data = self.session.ir.to_dict()
+
+            self._preview_busy = True
+            fut = self._preview_pool.submit(self._preview_job, ir_data, str(tmp_dir))
+            fut._cleanup_dir = str(tmp_dir)  # type: ignore[attr-defined]
+            self._preview_future = fut
+            QTimer.singleShot(40, self._poll_preview_future)
+            return json.dumps({"ok": True, "started": True}, ensure_ascii=False)
+        except Exception as exc:  # noqa: BLE001
+            self._preview_busy = False
+            return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    @Slot()
+    def _poll_preview_future(self) -> None:
+        fut = self._preview_future
+        if fut is None:
+            return
+        if not fut.done():
+            QTimer.singleShot(80, self._poll_preview_future)
+            return
+        self._preview_future = None
+        cleanup = getattr(fut, "_cleanup_dir", None)
+        try:
+            result = fut.result()
+        except Exception as exc:  # noqa: BLE001
+            result = {"ok": False, "error": str(exc)}
+        self._preview_busy = False
+        self.previewFinished.emit(json.dumps(result, ensure_ascii=False))
+        if cleanup:
+            try:
+                p = Path(cleanup)
+                for f in p.glob("*"):
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+                p.rmdir()
+            except OSError:
+                pass
+            if self._preview_tmpdir == cleanup:
+                self._preview_tmpdir = None
 
     @Slot(result=str)
     def openLastExport(self) -> str:
