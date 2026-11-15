@@ -35,8 +35,16 @@ PAGE = {
 
 # 红头上边缘距版心上边缘 35mm → 距纸顶 ≈ 37+35 = 72mm
 RED_HEADER_FROM_BODY_TOP_MM = 35.0
+# 红头行框内：字身上方空白占 (line_pt - font_pt) 的比例（Word/WPS 非居中）
+# 垫高时扣掉这段，使「红色墨迹顶」而非行框顶落在 35mm
+RED_HEADER_INK_ABOVE_RATIO = 0.59
+# 发文字号下到红线：目标 4mm（字身下缘 → 红线上缘）
 RED_LINE_GAP_MM = 4.0
-RED_LINE_PT = 2.0
+# 发文字号网格行内：字身下缘到行框底占 (line_pt - font_pt) 的比例
+# 红线空距段要扣掉这段，否则会在 4mm 之上再叠一行内下行隙
+RED_LINE_GLYPH_BELOW_RATIO = 0.28
+# 红线厚度（pt）；过粗时观感不像式样图，取约 0.75pt
+RED_LINE_PT = 0.75
 
 # 7.5 页码：一字线上距版心下边缘 7mm → 页脚距纸底 = 下白边 - 7
 PAGE_NUMBER_BELOW_BODY_MM = 7.0

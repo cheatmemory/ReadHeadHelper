@@ -962,13 +962,13 @@
                     <label for="f-signers">签发人 <span class="tag-opt">选填</span></label>
                     <button type="button" class="none-toggle" aria-pressed="true" aria-controls="f-signers">无此项</button>
                   </div>
-                  <input id="f-signers" value="" placeholder="上行文填写，多人顿号分隔" disabled />
+                  <input id="f-signers" value="" placeholder="上行文；多人顿号分隔，按机关顺序，每行两人自动排" disabled />
                 </div>
                 <div class="field full" data-req-key="org_mark">
                   <div class="field-head">
                     <label for="f-org">发文机关标志<span class="req">*</span></label>
                   </div>
-                  <input id="f-org" value="" placeholder="如 ××市人民政府" />
+                  <input id="f-org" value="" placeholder="主办在前；联合用顿号，如 甲局、乙局" />
                 </div>
                 <div class="field full" data-req-key="doc_number">
                   <div class="field-head">
@@ -1031,7 +1031,7 @@
                   <div class="field-head">
                     <label for="f-orgsig">发文机关署名<span class="req">*</span></label>
                   </div>
-                  <input id="f-orgsig" value="" placeholder="发文机关署名" />
+                  <input id="f-orgsig" value="" placeholder="主办在前；联合顿号或换行，可与红头机关一致" />
                 </div>
                 <div class="field" data-req-key="date">
                   <div class="field-head">
@@ -1057,7 +1057,7 @@
                   <div class="field-head">
                     <label for="f-print-org">印发机关<span class="req">*</span></label>
                   </div>
-                  <input id="f-print-org" value="" placeholder="印发机关" />
+                  <input id="f-print-org" value="" placeholder="惯例写主办机关办公厅（室）" />
                 </div>
                 <div class="field" data-req-key="print_date">
                   <div class="field-head">

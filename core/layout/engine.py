@@ -207,17 +207,39 @@ def _set_page_and_grid(doc: Document):
     docGrid.set(qn("w:charSpace"), str(char_pitch))
 
 
-def _add_banner_red_line(doc: Document) -> None:
+def _pt_to_mm(pt: float) -> float:
+    return float(pt) / 72.0 * U.MM_PER_INCH
+
+
+def _mark_line_pt(font_pt: float, grid_line_pt: float) -> float:
+    return max(float(font_pt) * 1.25, float(grid_line_pt))
+
+
+def _mark_ink_inset_mm(font_pt: float, grid_line_pt: float) -> float:
+    """红头首行：行框顶 → 红色墨迹顶（字身上沿）的空隙。"""
+    line_pt = _mark_line_pt(font_pt, grid_line_pt)
+    return _pt_to_mm(max(0.0, (line_pt - float(font_pt)) * U.RED_HEADER_INK_ABOVE_RATIO))
+
+
+def _docno_glyph_below_mm(line_pt: float, font_pt: float = U.PT_3) -> float:
+    """发文字号行：字身下缘 → 行框底的空隙（进入红线间距的测量）。"""
+    return _pt_to_mm(max(0.0, (float(line_pt) - float(font_pt)) * U.RED_LINE_GLYPH_BELOW_RATIO))
+
+
+def _add_banner_red_line(doc: Document, *, docno_line_pt: float | None = None) -> None:
     """§7.2.7：发文字号下 4mm、与版心等宽的红色分隔线。
 
-    不用发文字号段的 pBdr：上行文左空一字会使边框跟着右移；
-    段落下边框本身也常比版心略窄。改为「空距段 + 定宽单列表底边」。
+    不用发文字号段的 pBdr：上行文左空一字会使边框跟着右移。
+    用「空距段 + 定宽表顶边」：红线在表格顶缘，避免底边框再叠加行高把间距撑到 >4mm。
+    空距按「字身下缘→红线」计，扣掉发文字号网格行内字身以下的空白。
     """
-    gap_pt = U.RED_LINE_GAP_MM / U.MM_PER_INCH * 72.0
+    line_pt = float(docno_line_pt) if docno_line_pt is not None else _grid_line_pt()
+    gap_mm = max(0.5, U.RED_LINE_GAP_MM - _docno_glyph_below_mm(line_pt, U.PT_3))
+    gap_pt = gap_mm / U.MM_PER_INCH * 72.0
     spacer = doc.add_paragraph()
     _set_paragraph_spacing(spacer, before_pt=0, after_pt=0, line_pt=gap_pt)
     _disable_snap_to_grid(spacer)
-    _set_run_font(spacer.add_run(""), name="仿宋_GB2312", size_pt=1.0)
+    _set_run_font(spacer.add_run(""), name="仿宋_GB2312", size_pt=0.5)
 
     body_w = U.mm_to_twips(U.PAGE["body_width_mm"])
     table = doc.add_table(rows=1, cols=1)
@@ -247,11 +269,11 @@ def _add_banner_red_line(doc: Document) -> None:
     tblPr.append(layout)
 
     borders = OxmlElement("w:tblBorders")
-    line_sz = int(round(U.RED_LINE_PT * 8))
+    line_sz = max(2, int(round(U.RED_LINE_PT * 8)))
     for edge, val, sz, color in (
-        ("top", "nil", 0, "auto"),
+        ("top", "single", line_sz, "FF0000"),
         ("left", "nil", 0, "auto"),
-        ("bottom", "single", line_sz, "FF0000"),
+        ("bottom", "nil", 0, "auto"),
         ("right", "nil", 0, "auto"),
         ("insideH", "nil", 0, "auto"),
         ("insideV", "nil", 0, "auto"),
@@ -283,7 +305,8 @@ def _add_banner_red_line(doc: Document) -> None:
 
     cell.text = ""
     cp = cell.paragraphs[0]
-    _set_paragraph_spacing(cp, before_pt=0, after_pt=0, line_pt=1.0)
+    # 行高压到最小，红线即表顶，不再额外占 4mm 以外的空隙
+    _set_paragraph_spacing(cp, before_pt=0, after_pt=0, line_pt=0.5)
     _disable_snap_to_grid(cp)
 
 
@@ -324,12 +347,142 @@ def _signature_right_indents(
         sig_right = date_right + (date_w - sig_w) / 2.0
         return max(0.0, sig_right), date_right
 
-    # 无章：署名右空二字时，日期右空 = 署名宽 - 日期宽（首字右移二字）
+    # 无章：二选一（与多机关 _no_stamp_multi_layout 同一原则）
+    # 日期不长于署名 → 署名右空二字，日期右空 = 署名宽 - 日期宽（首字右移二字）
     date_right_if_sig2 = sig_w - date_w
     if date_right_if_sig2 >= 0:
         return 2.0 * one, date_right_if_sig2
-    # 日期更长：日期右空二字，相应增加署名右空
+    # 日期更长 → 只锚日期右空二字，署名右空相应加大
     return date_w - sig_w + 4.0 * one, 2.0 * one
+
+
+def _no_stamp_multi_layout(
+    orgs: list[str],
+    date: str,
+    font_face: str,
+    size_pt: float = U.PT_3,
+) -> dict:
+    """§7.3.5.2 无章多机关落款：按「日期是否长于最长署名」二选一锚定。
+
+    - 日期不长于署名：只锚首字（署名右空二字，日期首字右移二字）→ 日期仅左缩进
+    - 日期更长：只锚右端（日期右空二字）→ 日期仅右缩进右齐；署名首字再左移二字
+
+    禁止日期段同时设左、右缩进：两者叠加会把可用宽压成「测得字宽」，
+    实测略宽时就会把末字挤到下一行。
+    """
+    one = float(size_pt)
+    body_pt = _body_width_pt()
+    max_w = max(layout_text_width_pt(o, font_face, size_pt) for o in orgs)
+    date_w = layout_text_width_pt(date, font_face, size_pt)
+
+    if date_w <= max_w:
+        # 首字分支：可用宽 = max_w ≥ date_w，日期只设左缩进
+        sig_left = max(0.0, body_pt - 2.0 * one - max_w)
+        return {
+            "branch": "first_char",
+            "sig_left": sig_left,
+            "date_left": sig_left + 2.0 * one,
+            "date_right": None,
+        }
+
+    # 右空分支：日期只设右缩进；署名随日期左缘左移二字
+    date_right = 2.0 * one
+    date_left = body_pt - date_right - date_w
+    sig_left = max(0.0, date_left - 2.0 * one)
+    return {
+        "branch": "date_right",
+        "sig_left": sig_left,
+        "date_left": None,
+        "date_right": date_right,
+    }
+
+
+_SPLIT_ORG_RE = re.compile(r"[、，,；;]+")
+
+
+def _strip_wenjian_suffix(name: str) -> str:
+    t = (name or "").strip()
+    if t.endswith("文件"):
+        t = t[: -len("文件")].rstrip()
+    return t
+
+
+def _split_org_list(raw: str) -> list[str]:
+    """署名/机关列表：支持换行与顿号分隔。"""
+    out: list[str] = []
+    for line in (raw or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in _SPLIT_ORG_RE.split(line) if p.strip()]
+        out.extend(parts or [line])
+    return out
+
+
+def _raw_org_marks(ir: LayoutIR) -> list[str]:
+    return [str(m).strip() for m in (ir.org_marks or []) if str(m).strip()]
+
+
+def _resolve_signature_orgs(ir: LayoutIR) -> list[str]:
+    """落款机关顺序：优先署名字段；多机关时可回退红头机关（去「文件」）。"""
+    sigs = _split_org_list(ir.org_signature)
+    if len(sigs) >= 2:
+        return sigs
+    marks = [_strip_wenjian_suffix(m) for m in _raw_org_marks(ir)]
+    marks = [m for m in marks if m]
+    if len(marks) >= 2:
+        return marks
+    if sigs:
+        return sigs
+    if marks:
+        return marks
+    return []
+
+
+def _chunk_list(items: list[str], n: int) -> list[list[str]]:
+    return [items[i : i + n] for i in range(0, len(items), n)]
+
+
+def _join_org_row(orgs: list[str]) -> str:
+    """同行多个机关：2 个用双全角空格，3 个用单全角空格（对齐样例）。"""
+    if len(orgs) >= 3:
+        return "　".join(orgs)
+    return "　　".join(orgs)
+
+
+def _clear_tbl_borders(tbl_pr) -> None:
+    for tag in ("tblBorders",):
+        for old in tbl_pr.findall(qn(f"w:{tag}")):
+            tbl_pr.remove(old)
+    borders = OxmlElement("w:tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        el = OxmlElement(f"w:{edge}")
+        el.set(qn("w:val"), "nil")
+        el.set(qn("w:sz"), "0")
+        el.set(qn("w:space"), "0")
+        el.set(qn("w:color"), "auto")
+        borders.append(el)
+    tbl_pr.append(borders)
+
+
+def _set_cell_width(cell, twips: int) -> None:
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    for old in tcPr.findall(qn("w:tcW")):
+        tcPr.remove(old)
+    tcW = OxmlElement("w:tcW")
+    tcW.set(qn("w:w"), str(int(twips)))
+    tcW.set(qn("w:type"), "dxa")
+    tcPr.append(tcW)
+    vAlign = tcPr.find(qn("w:vAlign"))
+    if vAlign is None:
+        vAlign = OxmlElement("w:vAlign")
+        tcPr.append(vAlign)
+    vAlign.set(qn("w:val"), "center")
+
+
+def _body_width_pt() -> float:
+    return U.PAGE["body_width_mm"] / U.MM_PER_INCH * 72.0
 
 
 class DocxEngine:
@@ -410,75 +563,306 @@ class DocxEngine:
             face = self.fonts["fangsong"] if kind == "copy" else self.fonts["heiti"]
             _set_run_font(run, name=face, size_pt=U.PT_3)
 
-        # 红头距版心顶 35mm：用空网格行垫到约 35mm（减去已占顶栏行）
-        # 已占 top_items 行；目标空行数 ≈ 35mm / 行高
-        mm_per_line = U.PAGE["body_height_mm"] / U.GRID_ROWS
-        target_lines = int(round(U.RED_HEADER_FROM_BODY_TOP_MM / mm_per_line))
-        pad = max(0, target_lines - len(top_items))
-        _empty_grid_lines(doc, pad, self.line_pt)
-
-        # 发文机关标志（单一红头：字号 = 一行能放下的最大 pt）
-        marks = [m.strip() for m in (ir.org_marks or []) if str(m).strip()]
+        # 发文机关标志：单机关单行；联合机关 → 名称成块 + 右侧「文件」
+        # 先定字号/行框，再按「墨迹顶 = 版心顶 + 35mm」反推垫高（扣行内字身上方空白）
+        marks = _raw_org_marks(ir)
         if not marks:
             marks = [""]
         mark_face = self.fonts["xiaobiaosong"]
-        for mark in marks:
+        joint_plan = None
+        if len(marks) >= 2:
+            joint_names = [_strip_wenjian_suffix(m) or m for m in marks]
+            joint_plan = self._plan_joint_header(joint_names, mark_face)
+            mark_font_pt = float(joint_plan["size_pt"])
+        else:
+            mark_font_pt = float(_max_one_line_mark_font_pt(marks[0], mark_face))
+
+        mm_per_line = U.PAGE["body_height_mm"] / U.GRID_ROWS
+        used_mm = len(top_items) * mm_per_line
+        ink_inset_mm = _mark_ink_inset_mm(mark_font_pt, self.line_pt)
+        spacer_mm = max(
+            0.0,
+            U.RED_HEADER_FROM_BODY_TOP_MM - used_mm - ink_inset_mm,
+        )
+        if spacer_mm > 0.05:
+            spacer_pt = spacer_mm / U.MM_PER_INCH * 72.0
+            sp = doc.add_paragraph()
+            _set_paragraph_spacing(sp, before_pt=0, after_pt=0, line_pt=spacer_pt)
+            _disable_snap_to_grid(sp)
+            _set_run_font(sp.add_run(""), name=self.fonts["fangsong"], size_pt=0.5)
+
+        if joint_plan is not None:
+            self._write_joint_header_table(doc, mark_face, joint_plan)
+        else:
+            mark = marks[0]
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            # 联合红头以后再做侧排「文件」；暂先各行独立按一行最大字号
-            size_pt = _max_one_line_mark_font_pt(mark, mark_face)
-            _set_spacing_for_font(p, size_pt, grid_line_pt=self.line_pt)
+            _set_spacing_for_font(p, mark_font_pt, grid_line_pt=self.line_pt)
             run = p.add_run(mark)
             _set_run_font(
                 run,
                 name=mark_face,
-                size_pt=size_pt,
+                size_pt=mark_font_pt,
                 color=RGBColor(255, 0, 0),
             )
 
         # 标志下空二行
         _empty_grid_lines(doc, 2, self.line_pt)
 
-        # 发文字号：下行居中；上行（有签发人）§7.2.5/7.2.6 左空一字 + 签发人右空一字同行
-        if ir.signers:
+        # 发文字号 / 签发人（§7.2.5 / 7.2.6）
+        self._write_docno_and_signers(doc, ir)
+
+        # 红线独立于发文字号段（§7.2.7 版心等宽；上行左空一字不拖偏红线）
+        _add_banner_red_line(doc, docno_line_pt=self.line_pt)
+
+        # 红线下空二行
+        _empty_grid_lines(doc, 2, self.line_pt)
+
+    def _pack_joint_header_rows(
+        self,
+        marks: list[str],
+        mark_face: str,
+        size_pt: float,
+        max_width_pt: float,
+    ) -> list[str] | None:
+        """把机关名排成行。单个机关名绝不拆开；装不下则返回 None（需缩小字号）。
+
+        ≤3 个：强制每行一个。≥4 个：同行两个仅当整行（含两机关名）测宽装得下。
+        """
+        pad = 1.10  # 相对 Word/WPS 实测多留余量，避免格内再折行
+        # 任一单名本身超宽 → 此字号不可用
+        for name in marks:
+            if layout_text_width_pt(name, mark_face, size_pt) * pad > max_width_pt:
+                return None
+
+        allow_pair = len(marks) >= 4
+        rows: list[str] = []
+        i = 0
+        while i < len(marks):
+            if allow_pair and i + 1 < len(marks):
+                paired = _join_org_row([marks[i], marks[i + 1]])
+                if layout_text_width_pt(paired, mark_face, size_pt) * pad <= max_width_pt:
+                    rows.append(paired)
+                    i += 2
+                    continue
+            rows.append(marks[i])
+            i += 1
+        return rows
+
+    def _plan_joint_header(self, marks: list[str], mark_face: str) -> dict:
+        """选定联合红头字号、行内容与列宽（供垫高计算与写表共用）。"""
+        body_w = U.mm_to_twips(U.PAGE["body_width_mm"])
+        body_pt = _body_width_pt()
+        pad = 1.10
+
+        size_pt = float(U.PT_3)
+        rows = list(marks)
+        file_w = int(round(size_pt * 2.2 * 20))
+        names_w = body_w - file_w
+
+        for trial in [x * 0.5 for x in range(int(U.PT_MARK_DEFAULT * 2), int(U.PT_3 * 2) - 1, -1)]:
+            file_pt = layout_text_width_pt("文件", mark_face, trial) * pad
+            gap_pt = trial * 0.35  # 名称块与「文件」之间留约 1/3 字缝
+            file_need_pt = file_pt + gap_pt
+            max_names_pt = body_pt - file_need_pt
+            if max_names_pt < trial * 4:
+                continue
+            packed = self._pack_joint_header_rows(marks, mark_face, trial, max_names_pt)
+            if packed is None:
+                continue
+            content_pt = max(
+                layout_text_width_pt(line, mark_face, trial) for line in packed
+            ) * pad
+            names_pt = min(max_names_pt, max(content_pt, trial * 2))
+            fw = max(1, int(round(file_need_pt * 20)))
+            nw = max(1, int(round(names_pt * 20)))
+            if nw + fw > body_w:
+                nw = body_w - fw
+            size_pt = float(trial)
+            file_w, names_w = fw, nw
+            rows = packed
+            break
+
+        return {
+            "size_pt": size_pt,
+            "rows": rows,
+            "names_w": names_w,
+            "file_w": file_w,
+        }
+
+    def _write_joint_header_table(self, doc: Document, mark_face: str, plan: dict) -> None:
+        """联合红头：左列机关分行 + 右列「文件」垂直居中。
+
+        列宽按内容自动调：右列只留「文件」二字+小间隙；左列随最长机关名往右拉。
+        整表按内容总宽居中，避免「文件」格虚占半个版心。
+        """
+        size_pt = float(plan["size_pt"])
+        rows = list(plan["rows"])
+        names_w = int(plan["names_w"])
+        file_w = int(plan["file_w"])
+        table_w = names_w + file_w
+        table = doc.add_table(rows=1, cols=2)
+        table.autofit = False
+        tbl = table._tbl
+        tblPr = tbl.tblPr
+        if tblPr is None:
+            tblPr = OxmlElement("w:tblPr")
+            tbl.insert(0, tblPr)
+        for tag in ("tblW", "tblBorders", "tblCellMar", "tblLayout", "tblInd", "jc"):
+            for old in tblPr.findall(qn(f"w:{tag}")):
+                tblPr.remove(old)
+
+        tblW = OxmlElement("w:tblW")
+        tblW.set(qn("w:w"), str(table_w))
+        tblW.set(qn("w:type"), "dxa")
+        tblPr.append(tblW)
+        jc = OxmlElement("w:jc")
+        jc.set(qn("w:val"), "center")
+        tblPr.append(jc)
+        layout = OxmlElement("w:tblLayout")
+        layout.set(qn("w:type"), "fixed")
+        tblPr.append(layout)
+        _clear_tbl_borders(tblPr)
+        cellMar = OxmlElement("w:tblCellMar")
+        for side in ("top", "left", "bottom", "right"):
+            m = OxmlElement(f"w:{side}")
+            m.set(qn("w:w"), "0")
+            m.set(qn("w:type"), "dxa")
+            cellMar.append(m)
+        tblPr.append(cellMar)
+
+        for old in tbl.findall(qn("w:tblGrid")):
+            tbl.remove(old)
+        grid = OxmlElement("w:tblGrid")
+        for w in (names_w, file_w):
+            gc = OxmlElement("w:gridCol")
+            gc.set(qn("w:w"), str(int(w)))
+            grid.append(gc)
+        tblPr.addnext(grid)
+
+        left, right = table.rows[0].cells
+        _set_cell_width(left, names_w)
+        _set_cell_width(right, file_w)
+        # 禁止格内自动折行：单个机关名必须整行显示（字号已按测宽收敛）
+        for cell in (left, right):
+            tcPr = cell._tc.get_or_add_tcPr()
+            if tcPr.find(qn("w:noWrap")) is None:
+                tcPr.append(OxmlElement("w:noWrap"))
+
+        # 左列：每段一整行（已测宽）；noWrap 禁止在机关名中间折行
+        left.paragraphs[0].clear()
+        for i, line in enumerate(rows):
+            p = left.paragraphs[0] if i == 0 else left.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            _set_spacing_for_font(p, size_pt, grid_line_pt=self.line_pt)
+            run = p.add_run(line)
+            _set_run_font(run, name=mark_face, size_pt=size_pt, color=RGBColor(255, 0, 0))
+
+        # 右列：文件（左齐贴名称块；格已收成二字宽）
+        rp = right.paragraphs[0]
+        rp.clear()
+        rp.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        _set_spacing_for_font(rp, size_pt, grid_line_pt=self.line_pt)
+        rr = rp.add_run("文件")
+        _set_run_font(rr, name=mark_face, size_pt=size_pt, color=RGBColor(255, 0, 0))
+
+    def _write_docno_and_signers(self, doc: Document, ir: LayoutIR) -> None:
+        """发文字号 + 签发人。1–2 人同行；≥3 人按每行两人并与字号行联动。"""
+        signers = [s.strip() for s in (ir.signers or []) if str(s).strip()]
+        fangsong = self.fonts["fangsong"]
+        kaiti = self.fonts["kaiti"]
+        one_twips = int(round(U.PT_3 * 20))
+        body_w = U.mm_to_twips(U.PAGE["body_width_mm"])
+        body_pt = _body_width_pt()
+
+        if not signers:
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            _set_paragraph_spacing(p, line_pt=self.line_pt)
+            run = p.add_run(ir.doc_number)
+            _set_run_font(run, name=fangsong, size_pt=U.PT_3)
+            return
+
+        label = "签发人："
+        label_w = layout_text_width_pt(label, fangsong, U.PT_3)
+
+        def add_signer_runs(paragraph, names: list[str], *, with_label: bool) -> None:
+            if with_label:
+                r_label = paragraph.add_run(label)
+                _set_run_font(r_label, name=fangsong, size_pt=U.PT_3)
+            for i, name in enumerate(names):
+                if i:
+                    gap = paragraph.add_run("　")
+                    _set_run_font(gap, name=fangsong, size_pt=U.PT_3)
+                rn = paragraph.add_run(name)
+                _set_run_font(rn, name=kaiti, size_pt=U.PT_3)
+
+        # ≤2 人：保持原版「字号左空一字 + 右侧签发人」单行
+        if len(signers) <= 2:
             p = doc.add_paragraph()
             _set_paragraph_spacing(p, line_pt=self.line_pt)
-            one_twips = int(round(U.PT_3 * 20))
-            body_w = U.mm_to_twips(U.PAGE["body_width_mm"])
             pPr = p._p.get_or_add_pPr()
-            # 只用绝对 twips（3 号一字 = 16pt = 320）。勿写 leftChars：
-            # Word 会优先按字符网格折算，常变成约 11pt，且 COM 难清掉。
             ind = OxmlElement("w:ind")
             ind.set(qn("w:left"), str(one_twips))
             pPr.append(ind)
             tabs = OxmlElement("w:tabs")
             tab = OxmlElement("w:tab")
             tab.set(qn("w:val"), "right")
-            # 右对齐制表位在版心右空一字处
             tab.set(qn("w:pos"), str(body_w - one_twips))
             tabs.append(tab)
             pPr.append(tabs)
             r1 = p.add_run(ir.doc_number)
-            _set_run_font(r1, name=self.fonts["fangsong"], size_pt=U.PT_3)
+            _set_run_font(r1, name=fangsong, size_pt=U.PT_3)
             p.add_run("\t")
-            # 「签发人」+ 全角冒号：3 号仿宋；姓名：3 号楷体
-            r_label = p.add_run("签发人：")
-            _set_run_font(r_label, name=self.fonts["fangsong"], size_pt=U.PT_3)
-            names = "　".join(s.strip() for s in ir.signers if str(s).strip())
-            r_names = p.add_run(names)
-            _set_run_font(r_names, name=self.fonts["kaiti"], size_pt=U.PT_3)
-        else:
+            add_signer_runs(p, signers, with_label=True)
+            return
+
+        # ≥3 人：除末行外每行 2 人；末行与发文字号同行
+        pairs: list[list[str]] = []
+        buf = list(signers)
+        while len(buf) > 2:
+            pairs.append(buf[:2])
+            buf = buf[2:]
+        last = buf
+
+        first_names = pairs[0]
+        names_w = layout_text_width_pt("　".join(first_names), kaiti, U.PT_3)
+        first_w = label_w + names_w
+        # 右空一字右齐后，第一姓名左缘
+        first_name_x = body_pt - U.PT_3 - first_w + label_w
+        first_name_tw = max(0, int(round(first_name_x * 20)))
+
+        # 首行：签发人：甲　乙（居右空一字）
+        p0 = doc.add_paragraph()
+        p0.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        _set_paragraph_spacing(p0, line_pt=self.line_pt)
+        p0.paragraph_format.right_indent = Pt(U.PT_3)
+        add_signer_runs(p0, first_names, with_label=True)
+
+        # 中间续行：与第一姓名左齐
+        for pair in pairs[1:]:
             p = doc.add_paragraph()
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             _set_paragraph_spacing(p, line_pt=self.line_pt)
-            run = p.add_run(ir.doc_number)
-            _set_run_font(run, name=self.fonts["fangsong"], size_pt=U.PT_3)
+            p.paragraph_format.left_indent = Pt(first_name_x)
+            add_signer_runs(p, pair, with_label=False)
 
-        # 红线独立于发文字号段（§7.2.7 版心等宽；上行左空一字不拖偏红线）
-        _add_banner_red_line(doc)
-
-        # 红线下空二行
-        _empty_grid_lines(doc, 2, self.line_pt)
+        # 末行：发文字号左空一字 + 制表位到第一姓名位置排剩余签发人
+        p_last = doc.add_paragraph()
+        _set_paragraph_spacing(p_last, line_pt=self.line_pt)
+        pPr = p_last._p.get_or_add_pPr()
+        ind = OxmlElement("w:ind")
+        ind.set(qn("w:left"), str(one_twips))
+        pPr.append(ind)
+        tabs = OxmlElement("w:tabs")
+        tab = OxmlElement("w:tab")
+        tab.set(qn("w:val"), "left")
+        tab.set(qn("w:pos"), str(max(first_name_tw, one_twips + 1)))
+        tabs.append(tab)
+        pPr.append(tabs)
+        r_doc = p_last.add_run(ir.doc_number)
+        _set_run_font(r_doc, name=fangsong, size_pt=U.PT_3)
+        p_last.add_run("\t")
+        add_signer_runs(p_last, last, with_label=False)
 
     def _write_body(self, doc: Document, ir: LayoutIR):
         # 标题（2号小标宋，同样避免网格裁切）
@@ -546,27 +930,109 @@ class DocxEngine:
             _empty_grid_lines(doc, 1, self.line_pt)
 
         face = self.fonts["fangsong"]
-        sig_right_pt, date_right_pt = _signature_right_indents(
-            ir.org_signature, ir.date, ir.seal_mode, face
-        )
+        orgs = _resolve_signature_orgs(ir)
+        if len(orgs) <= 1:
+            sig = orgs[0] if orgs else (ir.org_signature or "")
+            sig_right_pt, date_right_pt = _signature_right_indents(
+                sig, ir.date, ir.seal_mode, face
+            )
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _set_paragraph_spacing(p, line_pt=self.line_pt)
+            _disable_snap_to_grid(p)  # 关字网格，否则右空常被撑大约 1 字
+            p.paragraph_format.right_indent = Pt(sig_right_pt)
+            p.paragraph_format.keep_with_next = True
+            p.paragraph_format.keep_together = True
+            run = p.add_run(sig)
+            _set_run_font(run, name=face, size_pt=U.PT_3)
 
-        # 署名 keep_with_next：若与成文日期装不下同一页，一并挪到下一页
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _set_paragraph_spacing(p, line_pt=self.line_pt)
+            _disable_snap_to_grid(p)
+            p.paragraph_format.right_indent = Pt(date_right_pt)
+            p.paragraph_format.keep_together = True
+            run = p.add_run(ir.date)
+            _set_run_font(run, name=face, size_pt=U.PT_3)
+            return
+
+        if ir.seal_mode == SealMode.STAMP:
+            self._write_multi_signature_stamp(doc, orgs, ir.date, face)
+        else:
+            self._write_multi_signature_no_stamp(doc, orgs, ir.date, face)
+
+    def _write_multi_signature_stamp(
+        self, doc: Document, orgs: list[str], date: str, face: str
+    ) -> None:
+        """有章联合署名：每排最多 3 个；日期右空四字；末排最右机关中心与日期中心对齐。"""
+        rows = _chunk_list(orgs, 3)
+        body_pt = _body_width_pt()
+        one = float(U.PT_3)
+        date_w = layout_text_width_pt(date, face, U.PT_3)
+        date_right = 4.0 * one
+        date_center = body_pt - date_right - date_w / 2.0
+
+        for i, row in enumerate(rows):
+            is_last = i == len(rows) - 1
+            row_text = _join_org_row(row)
+            p = doc.add_paragraph()
+            _set_paragraph_spacing(p, line_pt=self.line_pt)
+            _disable_snap_to_grid(p)
+            p.paragraph_format.keep_with_next = True
+            p.paragraph_format.keep_together = True
+            if is_last:
+                # 末行：左缩进使最右机关中心落在日期中心上（同单机关「以日期为准居中」）
+                last_w = layout_text_width_pt(row[-1], face, U.PT_3)
+                row_w = layout_text_width_pt(row_text, face, U.PT_3)
+                row_left = date_center - (row_w - last_w / 2.0)
+                row_left = max(0.0, min(row_left, body_pt - row_w))
+                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                p.paragraph_format.left_indent = Pt(row_left)
+            else:
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = p.add_run(row_text)
+            _set_run_font(run, name=face, size_pt=U.PT_3)
+
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         _set_paragraph_spacing(p, line_pt=self.line_pt)
-        p.paragraph_format.right_indent = Pt(sig_right_pt)
-        p.paragraph_format.keep_with_next = True
+        _disable_snap_to_grid(p)
+        p.paragraph_format.right_indent = Pt(date_right)
         p.paragraph_format.keep_together = True
-        run = p.add_run(ir.org_signature)
+        run = p.add_run(date)
         _set_run_font(run, name=face, size_pt=U.PT_3)
 
+    def _write_multi_signature_no_stamp(
+        self, doc: Document, orgs: list[str], date: str, face: str
+    ) -> None:
+        """无章联合署名：每行一个、首字对齐；日期按 §7.3.5.2 二选一锚定（绝不左右缩进同时设）。"""
+        layout = _no_stamp_multi_layout(orgs, date, face, U.PT_3)
+
+        for org in orgs:
+            p = doc.add_paragraph()
+            _set_paragraph_spacing(p, line_pt=self.line_pt)
+            _disable_snap_to_grid(p)
+            p.paragraph_format.left_indent = Pt(layout["sig_left"])
+            p.paragraph_format.keep_with_next = True
+            p.paragraph_format.keep_together = True
+            run = p.add_run(org)
+            _set_run_font(run, name=face, size_pt=U.PT_3)
+
         p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         _set_paragraph_spacing(p, line_pt=self.line_pt)
-        p.paragraph_format.right_indent = Pt(date_right_pt)
+        _disable_snap_to_grid(p)
         p.paragraph_format.keep_together = True
-        # 成文日期用半角阿拉伯数字（与国标图示、页码条款、文内其它数字一致）
-        run = p.add_run(ir.date)
+        if layout["branch"] == "first_char":
+            # 只锚首字：左齐 + 左缩进；不设右缩进，避免与测宽抢宽度
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            p.paragraph_format.left_indent = Pt(layout["date_left"])
+            p.paragraph_format.right_indent = Pt(0)
+        else:
+            # 只锚右端：右齐 + 右空二字；不设左缩进
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            p.paragraph_format.left_indent = Pt(0)
+            p.paragraph_format.right_indent = Pt(layout["date_right"])
+        run = p.add_run(date)
         _set_run_font(run, name=face, size_pt=U.PT_3)
 
     def _write_note(self, doc: Document, ir: LayoutIR):

@@ -301,13 +301,13 @@ def test_banner_red_line_body_width_gbt_7_2_7(tmp_path):
 
     red = None
     for tbl in root.findall(".//" + W + "tbl"):
-        bottom = tbl.find(W + "tblPr/" + W + "tblBorders/" + W + "bottom")
-        if bottom is not None and (bottom.get(W + "color") or "").upper() == "FF0000":
+        top = tbl.find(W + "tblPr/" + W + "tblBorders/" + W + "top")
+        if top is not None and (top.get(W + "color") or "").upper() == "FF0000":
             red = tbl
             break
     assert red is not None
     tblW = red.find(W + "tblPr/" + W + "tblW")
-    bottom = red.find(W + "tblPr/" + W + "tblBorders/" + W + "bottom")
+    top = red.find(W + "tblPr/" + W + "tblBorders/" + W + "top")
     assert tblW.get(W + "w") == body_w
-    assert bottom.get(W + "val") == "single"
-    assert bottom.get(W + "sz") == line_sz
+    assert top.get(W + "val") == "single"
+    assert top.get(W + "sz") == line_sz
