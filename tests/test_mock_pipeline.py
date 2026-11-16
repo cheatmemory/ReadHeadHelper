@@ -139,6 +139,10 @@ def test_banji_floating_table_gbt_7_4(tmp_path):
             break
     assert banji is not None
 
+    # 版记行不得中剖跨页（cantSplit）；主送/抄送过长时整行挪页而非从字中断开
+    for tr in banji.findall(W + "tr"):
+        assert tr.find(W + "trPr/" + W + "cantSplit") is not None
+
     borders = banji.find(W + "tblPr/" + W + "tblBorders")
     assert borders is not None
     assert borders.find(W + "top").get(W + "val") == "single"

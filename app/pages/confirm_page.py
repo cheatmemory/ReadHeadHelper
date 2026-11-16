@@ -69,7 +69,7 @@ class ConfirmPage(QWidget):
         self._add_optional(hg, 1, 0, "urgency", "紧急程度", "特急 / 加急")
         self._add_optional(hg, 1, 1, "issuer_sign", "签发人", "上行文填写")
         self._add_required(hg, 2, 0, 2, "org_mark", "发文机关标志 *")
-        self._add_required(hg, 3, 0, 2, "doc_number", "发文字号 *")
+        self._doc_number_box = self._add_required(hg, 3, 0, 2, "doc_number", "发文字号 *")
         root.addWidget(header)
 
         main = QGroupBox("主体")
@@ -81,7 +81,7 @@ class ConfirmPage(QWidget):
 
         foot = QGroupBox("落款与版记")
         fg = QGridLayout(foot)
-        self._add_required(fg, 0, 0, 1, "org_signature", "发文机关署名 *")
+        self._org_signature_box = self._add_required(fg, 0, 0, 1, "org_signature", "发文机关署名 *")
         self._add_required(fg, 0, 1, 1, "date", "成文日期 *")
         self._add_optional(fg, 1, 0, "note", "附注", "（此件公开发布）")
         self._add_optional(fg, 1, 1, "cc_recipients", "抄送", "需人工或模型填写")
@@ -128,6 +128,7 @@ class ConfirmPage(QWidget):
         if multiline and not isinstance(edit, QTextEdit):
             pass
         grid.addWidget(box, r, c, 1, span)
+        return box
 
     def _toggle_none(self, key: str, on: bool):
         btn = self.none_btns[key]
@@ -150,17 +151,33 @@ class ConfirmPage(QWidget):
 
     def load_from_session(self):
         ir = self.session.ir
+        minutes = ir.is_minutes()
+        # 纪要无发文字号 / 发文机关署名
+        if hasattr(self, "_doc_number_box"):
+            self._doc_number_box.setVisible(not minutes)
+        if hasattr(self, "_org_signature_box"):
+            self._org_signature_box.setVisible(not minutes)
+        org_label = "纪要标志 *" if minutes else "发文机关标志 *"
+        # 更新机关标志旁标签文案
+        org_edit = self.fields.get("org_mark")
+        if org_edit is not None:
+            box = org_edit.parent()
+            if box is not None:
+                for lab in box.findChildren(QLabel):
+                    if "标志" in (lab.text() or "") or "纪要" in (lab.text() or ""):
+                        lab.setText(org_label)
+                        break
         mapping = {
             "copy_number": ir.copy_number,
             "secret_combo": (f"{ir.secret_level}★{ir.secret_period}" if ir.secret_level and ir.secret_period and "★" not in ir.secret_level else (ir.secret_level or "")),
             "urgency": ir.urgency,
             "issuer_sign": "、".join(ir.signers),
             "org_mark": "、".join(ir.org_marks),
-            "doc_number": ir.doc_number,
+            "doc_number": "" if minutes else ir.doc_number,
             "title": ir.title,
             "recipient": ir.recipient,
             "attachment_caption": ir.attachment_caption,
-            "org_signature": ir.org_signature,
+            "org_signature": "" if minutes else ir.org_signature,
             "date": ir.date,
             "note": ir.note,
             "cc_recipients": ir.cc_recipients,
@@ -178,7 +195,15 @@ class ConfirmPage(QWidget):
             if k in self.none_btns and not v.strip():
                 self.none_btns[k].setChecked(True)
                 self._toggle_none(k, True)
-        if ir.seal_mode:
+        if minutes:
+            ir.seal_mode = None
+            self.alert.hide()
+            for btn in self.seal_btns.values():
+                btn.setChecked(False)
+                btn.setProperty("selected", "false")
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+        elif ir.seal_mode:
             self._pick_seal(ir.seal_mode.value)
             self.alert.hide()
         else:
@@ -188,6 +213,7 @@ class ConfirmPage(QWidget):
         """写回 session.ir，返回阻断原因。"""
         ir = self.session.ir
         get = self._val
+        minutes = ir.is_minutes()
         secret = get("secret_combo")
         if "★" in secret:
             a, b = secret.split("★", 1)
@@ -198,11 +224,11 @@ class ConfirmPage(QWidget):
         ir.urgency = get("urgency")
         ir.signers = split_names(get("issuer_sign"))
         ir.org_marks = split_names(get("org_mark"))
-        ir.doc_number = get("doc_number")
+        ir.doc_number = "" if minutes else get("doc_number")
         ir.title = get("title")
         ir.recipient = get("recipient")
         ir.attachment_caption = get("attachment_caption")
-        ir.org_signature = get("org_signature")
+        ir.org_signature = "" if minutes else get("org_signature")
         ir.date = get("date")
         ir.note = get("note")
         ir.cc_recipients = get("cc_recipients")

@@ -61,8 +61,20 @@ class ExportPage(QWidget):
         root.addWidget(self.status)
         root.addStretch(1)
 
+    def _suggest_path(self) -> str:
+        ir = self.session.ir
+        out_dir = Path(self.out_path).parent if self.out_path else project_root() / "examples" / "out"
+        if ir.is_minutes():
+            from core.ir.minutes import minutes_export_basename
+
+            return str(out_dir / minutes_export_basename(ir))
+        name = (ir.doc_number or "导出公文").replace("/", "-") + ".docx"
+        return str(out_dir / name)
+
     def browse(self):
-        path, _ = QFileDialog.getSaveFileName(self, "保存 docx", self.out_path, "Word (*.docx)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存 docx", self._suggest_path(), "Word (*.docx)"
+        )
         if path:
             if not path.lower().endswith(".docx"):
                 path += ".docx"
@@ -75,6 +87,9 @@ class ExportPage(QWidget):
         if missing:
             QMessageBox.warning(self, "无法导出", "缺少：" + "、".join(missing))
             return False
+        if ir.is_minutes() and Path(self.out_path).name in {"导出公文.docx", "导出公文"}:
+            self.out_path = self._suggest_path()
+            self.path_label.setText(self.out_path)
         try:
             engine = DocxEngine()
             out = engine.render(ir, self.out_path)

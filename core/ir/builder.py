@@ -6,7 +6,8 @@ import re
 from typing import Iterable
 
 from core.body_structure.parser import parse_body_blocks
-from core.ir.schema import LayoutIR, ModelOutput, SealMode
+from core.ir.minutes import apply_minutes_to_ir
+from core.ir.schema import DocKind, LayoutIR, ModelOutput, SealMode
 
 
 _SPLIT_RE = re.compile(r"[、，,；;/\s]+")
@@ -48,7 +49,7 @@ def model_to_partial_ir(model: ModelOutput, source_text: str = "") -> LayoutIR:
         org_marks=org_marks,
         body_tree=parse_body_blocks(body_paras),
     )
-    return ir
+    return apply_minutes_to_ir(ir, source_text=source_text, model=model)
 
 
 def build_layout_ir(
@@ -67,9 +68,13 @@ def build_layout_ir(
     ir = model_to_partial_ir(model, source_text=source_text)
     if isinstance(seal_mode, str):
         seal_mode = SealMode(seal_mode) if seal_mode else None
-    ir.seal_mode = seal_mode
+    # 纪要不校验、不写入 seal_mode
+    if ir.is_minutes():
+        ir.seal_mode = None
+    else:
+        ir.seal_mode = seal_mode
     ir.cc_recipients = (cc_recipients or "").strip()
-    ir.recipients_in_footer = bool(recipients_in_footer)
+    ir.recipients_in_footer = bool(recipients_in_footer) or ir.recipients_in_footer
     if signers is not None:
         ir.signers = [s.strip() for s in signers if str(s).strip()]
     if org_marks is not None:
@@ -80,6 +85,10 @@ def build_layout_ir(
 
     if overrides:
         for k, v in overrides.items():
-            if hasattr(ir, k) and k not in {"seal_mode", "body_tree", "signers", "org_marks"}:
+            if hasattr(ir, k) and k not in {"seal_mode", "body_tree", "signers", "org_marks", "doc_kind"}:
                 setattr(ir, k, v)
+            if k == "doc_kind" and v:
+                ir.doc_kind = DocKind(v) if not isinstance(v, DocKind) else v
+                if ir.is_minutes():
+                    ir.seal_mode = None
     return ir

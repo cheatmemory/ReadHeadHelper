@@ -12,11 +12,12 @@ from docx.oxml.ns import qn
 from docx.shared import Mm, Pt, RGBColor, Twips
 
 from core.body_structure.parser import normalize_structure_markers
+from core.ir.minutes import format_issue_no
 from core.ir.schema import BodyBlock, LayoutIR, SealMode
 from core.layout import units as U
 from core.layout.attach_merge import append_docx_body, load_attachment_bytes
-from core.layout.font_measure import max_one_line_font_pt
-from core.layout.office_measure import layout_text_width_pt
+from core.layout.font_measure import max_one_line_font_pt, measure_text_width_pt, estimate_text_width_pt
+from core.layout.office_measure import estimate_layout_width_pt, layout_text_width_pt
 
 
 def _add_page_break(doc: Document) -> None:
@@ -97,6 +98,43 @@ def _max_one_line_mark_font_pt(text: str, font_face: str = "方正小标宋简�
     )
 
 
+def _minutes_mark_font_pt(text: str, font_face: str) -> tuple[float, bool]:
+    """纪要标志字号：实测 + 0.5pt 量化；≥26pt 强制单行；低于 26 才允许回行。
+
+    返回 (size_pt, allow_wrap)。
+    """
+    t = (text or "").strip()
+    if not t:
+        return float(U.PT_MARK_DEFAULT), False
+
+    usable_pt = U.PAGE["body_width_mm"] / U.MM_PER_INCH * 72.0 * 0.92
+    floor_pt = 26.0
+
+    def width_at(pt: float) -> float:
+        w = measure_text_width_pt(t, font_face, pt)
+        if w is not None:
+            return w * 1.03
+        return estimate_text_width_pt(t, pt)
+
+    if width_at(floor_pt) > usable_pt:
+        return floor_pt, True
+
+    raw = max_one_line_font_pt(
+        t,
+        body_width_mm=U.PAGE["body_width_mm"],
+        font_face=font_face,
+        min_pt=floor_pt,
+        max_pt=float(U.PT_MARK_DEFAULT),
+    )
+    # 量化到 0.5pt，向下取整保证仍单行可容纳
+    q = max(floor_pt, (int(raw * 2) / 2.0))
+    while q > floor_pt and width_at(q) > usable_pt:
+        q -= 0.5
+    if width_at(q) > usable_pt:
+        return floor_pt, True
+    return q, False
+
+
 def _grid_line_pt() -> float:
     """版心高 / 22 行 → 网格行高（磅）。"""
     body_height_inch = U.PAGE["body_height_mm"] / U.MM_PER_INCH
@@ -164,6 +202,14 @@ def _fill_page_number_paragraph(paragraph, *, odd: bool, font_name: str) -> None
     r1 = paragraph.add_run(dash)
     _set_run_font(r1, name=font_name, size_pt=U.PT_4)
     _disable_snap_to_grid(paragraph)
+
+
+def _row_cant_split(row) -> None:
+    """行级 cantSplit：单行内容不得在页中切开。"""
+    tr = row._tr
+    trPr = tr.get_or_add_trPr()
+    if trPr.find(qn("w:cantSplit")) is None:
+        trPr.append(OxmlElement("w:cantSplit"))
 
 
 def _setup_page_numbers(doc: Document, *, songti: str = "宋体") -> None:
@@ -498,6 +544,9 @@ class DocxEngine:
         self.line_pt = _grid_line_pt()
 
     def render(self, ir: LayoutIR, out_path: str | Path) -> Path:
+        if ir.is_minutes():
+            return self._render_minutes(ir, out_path)
+
         if ir.seal_mode is None:
             raise ValueError("seal_mode 未设置，拒绝导出")
         missing = ir.missing_required()
@@ -518,11 +567,244 @@ class DocxEngine:
         self._write_note(doc, ir)
         self._write_attachment_pages(doc, ir)
         self._write_banji(doc, ir)
+        # 与纪要相同：钉底浮动表后补 1pt 空段，避免部分 Word/WPS 多出一页空白
+        sp = doc.add_paragraph()
+        _set_paragraph_spacing(sp, before_pt=0, after_pt=0, line_pt=1.0)
+        _disable_snap_to_grid(sp)
+        _set_run_font(sp.add_run(""), name=self.fonts["fangsong"], size_pt=0.5)
 
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         doc.save(str(out_path))
         return out_path
+
+    def _render_minutes(self, ir: LayoutIR, out_path: str | Path) -> Path:
+        """纪要特定格式（docs/baselines/纪要.md）。不画红线、不走 seal_mode。"""
+        missing = ir.missing_required()
+        if missing:
+            raise ValueError("必填缺失：" + "、".join(missing))
+
+        doc = Document()
+        _set_page_and_grid(doc)
+        _setup_page_numbers(doc, songti=self.fonts["songti"])
+        if doc.paragraphs:
+            doc.paragraphs[0].clear()
+
+        self._write_minutes_banner(doc, ir)
+        self._write_minutes_body(doc, ir)
+        self._write_minutes_lists_date_note(doc, ir)
+        self._write_attachment_pages(doc, ir)
+        self._write_minutes_banji(doc, ir)
+
+        out_path = Path(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(out_path))
+        return out_path
+
+    def _write_minutes_banner(self, doc: Document, ir: LayoutIR) -> None:
+        top_items = []
+        if ir.copy_number.strip():
+            top_items.append(("copy", ir.copy_number.strip()))
+        secret = _secret_display(ir)
+        if secret:
+            top_items.append(("secret", secret))
+        if ir.urgency.strip():
+            top_items.append(("urgency", ir.urgency.strip()))
+
+        for kind, text in top_items:
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            _set_paragraph_spacing(p, line_pt=self.line_pt)
+            # §4.1：份号/密级/紧急均不得回行
+            pPr = p._p.get_or_add_pPr()
+            if pPr.find(qn("w:wordWrap")) is None:
+                ww = OxmlElement("w:wordWrap")
+                ww.set(qn("w:val"), "0")
+                pPr.append(ww)
+            run = p.add_run(text)
+            face = self.fonts["fangsong"] if kind == "copy" else self.fonts["heiti"]
+            _set_run_font(run, name=face, size_pt=U.PT_3)
+
+        mark = ir.primary_org_mark().strip()
+        mark_face = self.fonts["xiaobiaosong"]
+        mark_font_pt, allow_wrap = _minutes_mark_font_pt(mark, mark_face)
+
+        mm_per_line = U.PAGE["body_height_mm"] / U.GRID_ROWS
+        used_mm = len(top_items) * mm_per_line
+        ink_inset_mm = _mark_ink_inset_mm(mark_font_pt, self.line_pt)
+        spacer_mm = max(
+            0.0,
+            U.RED_HEADER_FROM_BODY_TOP_MM - used_mm - ink_inset_mm,
+        )
+        if spacer_mm > 0.05:
+            spacer_pt = spacer_mm / U.MM_PER_INCH * 72.0
+            sp = doc.add_paragraph()
+            _set_paragraph_spacing(sp, before_pt=0, after_pt=0, line_pt=spacer_pt)
+            _disable_snap_to_grid(sp)
+            _set_run_font(sp.add_run(""), name=self.fonts["fangsong"], size_pt=0.5)
+
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        _set_spacing_for_font(p, mark_font_pt, grid_line_pt=self.line_pt)
+        if not allow_wrap:
+            pPr = p._p.get_or_add_pPr()
+            if pPr.find(qn("w:wordWrap")) is None:
+                ww = OxmlElement("w:wordWrap")
+                ww.set(qn("w:val"), "0")
+                pPr.append(ww)
+        run = p.add_run(mark)
+        _set_run_font(
+            run,
+            name=mark_face,
+            size_pt=mark_font_pt,
+            color=RGBColor(255, 0, 0),
+        )
+
+        issue = format_issue_no(ir.issue_no)
+        if issue:
+            _empty_grid_lines(doc, 1, self.line_pt)
+            ip = doc.add_paragraph()
+            ip.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            _set_paragraph_spacing(ip, line_pt=self.line_pt)
+            irun = ip.add_run(issue)
+            _set_run_font(irun, name=self.fonts["fangsong"], size_pt=U.PT_3)
+            # 期号→标题 / 期号→正文：空 2 行
+            _empty_grid_lines(doc, 2, self.line_pt)
+        else:
+            # 无期号：标志→标题 或 标志→正文 均空 2 行
+            _empty_grid_lines(doc, 2, self.line_pt)
+
+    def _write_minutes_body(self, doc: Document, ir: LayoutIR) -> None:
+        if ir.title.strip():
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            _set_spacing_for_font(p, U.PT_2, grid_line_pt=self.line_pt)
+            run = p.add_run(ir.title.strip())
+            _set_run_font(run, name=self.fonts["xiaobiaosong"], size_pt=U.PT_2)
+            _empty_grid_lines(doc, 1, self.line_pt)
+
+        blocks = list(ir.body_tree or [])
+        for i, block in enumerate(blocks):
+            # 只让「标题 → 紧邻正文」同页。若标题之间互相 keep_with_next，
+            # Word/WPS 会把整条链挤到下一页，上一页留下大片空白（本篇曾因此撑到 4 页）。
+            nxt = blocks[i + 1] if i + 1 < len(blocks) else None
+            keep = (
+                block.level in {"h1", "h2", "h3", "h4"}
+                and nxt is not None
+                and (nxt.level or "p") == "p"
+            )
+            self._write_block(doc, block, keep_with_next_heading=keep)
+
+        if ir.attachment_caption.strip():
+            _empty_grid_lines(doc, 1, self.line_pt)
+            lines = _attachment_caption_lines(ir.attachment_caption)
+            name_align = Pt(U.PT_3 * 5)
+            for i, line in enumerate(lines):
+                p = doc.add_paragraph()
+                _set_paragraph_spacing(p, line_pt=self.line_pt)
+                # 规范「1.名称」→「1. 名称」，与样例一致
+                line = re.sub(r"^(\d+)\s*[.．、]\s*", r"\1. ", line.strip())
+                if i == 0:
+                    if not line.startswith("附件"):
+                        line = "附件：" + line
+                    else:
+                        line = re.sub(
+                            r"^(附件\s*[:：]\s*)(\d+)\s*[.．、]\s*",
+                            r"附件：\2. ",
+                            line,
+                        )
+                    p.paragraph_format.left_indent = name_align
+                    p.paragraph_format.first_line_indent = Pt(-U.PT_3 * 3)
+                else:
+                    p.paragraph_format.left_indent = name_align
+                run = p.add_run(line)
+                _set_run_font(run, name=self.fonts["fangsong"], size_pt=U.PT_3)
+
+    def _write_minutes_list_line(self, doc: Document, label: str, content: str) -> None:
+        """出席/请假/列席：名目+冒号黑体；其后仿宋；悬挂对齐冒号后首字。"""
+        text = (content or "").strip()
+        if not text:
+            return
+        heiti = self.fonts["heiti"]
+        fangsong = self.fonts["fangsong"]
+        label_part = f"{label}："
+        # 一字宽与落款同一口径；名目宽优先估算（避免 COM），有 GDI 则用实测
+        two = float(U.PT_3) * 2
+        label_w = estimate_layout_width_pt(label_part, U.PT_3)
+        measured = measure_text_width_pt(label_part, heiti, U.PT_3)
+        if measured is not None:
+            label_w = measured
+
+        p = doc.add_paragraph()
+        _set_paragraph_spacing(p, line_pt=self.line_pt)
+        _disable_snap_to_grid(p)
+        # left = 左空二字 + 名目宽；hanging = 名目宽 → 首行从二字起，续行与冒号后齐
+        p.paragraph_format.left_indent = Pt(two + label_w)
+        p.paragraph_format.first_line_indent = Pt(-label_w)
+
+        r0 = p.add_run(label_part)
+        _set_run_font(r0, name=heiti, size_pt=U.PT_3)
+        r1 = p.add_run(text)
+        _set_run_font(r1, name=fangsong, size_pt=U.PT_3)
+
+    def _write_minutes_lists_date_note(self, doc: Document, ir: LayoutIR) -> None:
+        blocks: list[tuple[str, str]] = []
+        if ir.attendance.strip():
+            blocks.append(("出席", ir.attendance.strip()))
+        if ir.leave.strip():
+            blocks.append(("请假", ir.leave.strip()))
+        if ir.liexi.strip():
+            blocks.append(("列席", ir.liexi.strip()))
+
+        if blocks:
+            _empty_grid_lines(doc, 1, self.line_pt)
+            for label, content in blocks:
+                self._write_minutes_list_line(doc, label, content)
+
+        has_date = bool(ir.date.strip())
+        has_note = bool(ir.note.strip())
+        if has_date:
+            if blocks:
+                _empty_grid_lines(doc, 1, self.line_pt)
+            elif not blocks:
+                # 无名单时：日期仍接在正文/附件说明后空一行
+                _empty_grid_lines(doc, 1, self.line_pt)
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _set_paragraph_spacing(p, line_pt=self.line_pt)
+            _disable_snap_to_grid(p)
+            p.paragraph_format.right_indent = Pt(U.PT_3 * 4)
+            run = p.add_run(ir.date.strip())
+            _set_run_font(run, name=self.fonts["fangsong"], size_pt=U.PT_3)
+            if has_note:
+                self._write_note(doc, ir)
+        elif has_note:
+            if blocks:
+                _empty_grid_lines(doc, 1, self.line_pt)
+            else:
+                _empty_grid_lines(doc, 1, self.line_pt)
+            self._write_note(doc, ir)
+
+    def _minutes_need_banji(self, ir: LayoutIR) -> bool:
+        if ir.recipient.strip() and ir.recipients_in_footer:
+            return True
+        if ir.cc_recipients.strip():
+            return True
+        if ir.print_org.strip() or ir.print_date.strip():
+            return True
+        return False
+
+    def _write_minutes_banji(self, doc: Document, ir: LayoutIR) -> None:
+        if not self._minutes_need_banji(ir):
+            return
+        # 与样例一致：版记浮动钉底；正文与表之间不插空段（空段会掉到末页上方，
+        # 再加钉底 → 中间大片留白）。防压由浮动 + tblOverlap=never 保证。
+        # 表后 1pt 空段：消除钉底后多出一页空白（baseline §13）。
+        self._write_banji(doc, ir, require_print=False, pin_bottom=True)
+        sp = doc.add_paragraph()
+        _set_paragraph_spacing(sp, before_pt=0, after_pt=0, line_pt=1.0)
+        _disable_snap_to_grid(sp)
+        _set_run_font(sp.add_run(""), name=self.fonts["fangsong"], size_pt=0.5)
 
     def _write_attachment_pages(self, doc: Document, ir: LayoutIR) -> None:
         """附件另页：不做国标标题居中等排版；仅「附件N」+ 空行 + 原文。"""
@@ -905,13 +1187,21 @@ class DocxEngine:
                 run = p.add_run(line)
                 _set_run_font(run, name=self.fonts["fangsong"], size_pt=U.PT_3)
 
-    def _write_block(self, doc: Document, block: BodyBlock):
+    def _write_block(
+        self,
+        doc: Document,
+        block: BodyBlock,
+        *,
+        keep_with_next_heading: bool = False,
+    ):
         p = doc.add_paragraph()
         _set_paragraph_spacing(p, line_pt=self.line_pt)
         font, size, bold = _font_for_level(block.level)
         # §7.3.3：正文自然段（含一、（一）、1. 等层次）均左空二字
         if block.level in {"h1", "h2", "h3", "h4", "p"}:
             p.paragraph_format.first_line_indent = Pt(size * 2)
+        if keep_with_next_heading and block.level in {"h1", "h2", "h3", "h4"}:
+            p.paragraph_format.keep_with_next = True
         text = block.text
         if block.level in {"h2", "h3", "h4"}:
             text = normalize_structure_markers(text)
@@ -1047,8 +1337,19 @@ class DocxEngine:
         run = p.add_run(note)
         _set_run_font(run, name=self.fonts["fangsong"], size_pt=U.PT_3)
 
-    def _write_banji(self, doc: Document, ir: LayoutIR):
-        """版记：浮动表沉底；上下粗/中间细；空一字用绝对 twips 缩进（不写进正文全角空格）。"""
+    def _write_banji(
+        self,
+        doc: Document,
+        ir: LayoutIR,
+        *,
+        require_print: bool = True,
+        pin_bottom: bool = True,
+    ):
+        """版记：上下粗/中间细；空一字用绝对 twips 缩进（不写进正文全角空格）。
+
+        require_print=False 时：无印发也可只排主送/抄送（纪要）。
+        pin_bottom=True：浮动表沉底（通用公文）；False：随正文顺序排布（纪要，避免末页大片留白）。
+        """
         body_w = U.mm_to_twips(U.PAGE["body_width_mm"])
         one = int(round(U.PT_4 * 20))  # 4 号一字
         row_pt = U.PT_4 * 1.15
@@ -1068,7 +1369,12 @@ class DocxEngine:
             upper_lines.append(cc)
 
         has_upper = bool(upper_lines)
-        table = doc.add_table(rows=2 if has_upper else 1, cols=2)
+        has_print = bool(ir.print_org.strip() or ir.print_date.strip()) or require_print
+        if not has_upper and not has_print:
+            return
+
+        n_rows = (1 if has_upper else 0) + (1 if has_print else 0)
+        table = doc.add_table(rows=n_rows, cols=2)
         table.autofit = False
         if has_upper:
             table.rows[0].cells[0].merge(table.rows[0].cells[1])
@@ -1106,36 +1412,39 @@ class DocxEngine:
         tblW.set(qn("w:type"), "dxa")
         tblPr.append(tblW)
 
-        tblpPr = OxmlElement("w:tblpPr")
-        for k, v in (
-            ("w:leftFromText", "0"),
-            ("w:rightFromText", "0"),
-            ("w:topFromText", "0"),
-            ("w:bottomFromText", "0"),
-            ("w:vertAnchor", "margin"),
-            ("w:horzAnchor", "margin"),
-            ("w:tblpXSpec", "left"),
-            ("w:tblpYSpec", "bottom"),
-        ):
-            tblpPr.set(qn(k), v)
-        tblPr.append(tblpPr)
+        if pin_bottom:
+            tblpPr = OxmlElement("w:tblpPr")
+            for k, v in (
+                ("w:leftFromText", "0"),
+                ("w:rightFromText", "0"),
+                ("w:topFromText", "0"),
+                ("w:bottomFromText", "0"),
+                ("w:vertAnchor", "margin"),
+                ("w:horzAnchor", "margin"),
+                ("w:tblpXSpec", "left"),
+                ("w:tblpYSpec", "bottom"),
+            ):
+                tblpPr.set(qn(k), v)
+            tblPr.append(tblpPr)
 
-        overlap = OxmlElement("w:tblOverlap")
-        overlap.set(qn("w:val"), "never")
-        tblPr.append(overlap)
+            overlap = OxmlElement("w:tblOverlap")
+            overlap.set(qn("w:val"), "never")
+            tblPr.append(overlap)
 
         layout = OxmlElement("w:tblLayout")
         layout.set(qn("w:type"), "fixed")
         tblPr.append(layout)
 
         # 一律 single，靠 sz 控粗细（thick 常忽略 sz，Word 读回 LineWidth=-1）
+        # 仅一行时中间线必须 none
+        inside_h = U.BANJI_LINE_THIN_SZ if (has_upper and has_print) else 0
         borders = OxmlElement("w:tblBorders")
         for edge, val, sz in (
             ("top", "single", U.BANJI_LINE_THICK_SZ),
             ("left", "nil", 0),
             ("bottom", "single", U.BANJI_LINE_THICK_SZ),
             ("right", "nil", 0),
-            ("insideH", "single", U.BANJI_LINE_THIN_SZ if has_upper else 0),
+            ("insideH", "single", inside_h),
             ("insideV", "nil", 0),
         ):
             el = OxmlElement(f"w:{edge}")
@@ -1194,12 +1503,15 @@ class DocxEngine:
             if hanging:
                 ind.set(qn("w:hanging"), str(hanging))
 
-        print_row = table.rows[1] if has_upper else table.rows[0]
+        # 版记各行均不可中剖；与 doNotBreakWrappedTables 一起保证整块同页
+        for row in table.rows:
+            _row_cant_split(row)
 
         if has_upper:
             cell = table.rows[0].cells[0]
             _set_tc_width(cell, body_w)
             first = True
+            upper_paras = []
             for line in upper_lines:
                 if first:
                     p = _cell_para(cell, clear=True)
@@ -1213,24 +1525,33 @@ class DocxEngine:
                 _set_ind(p, left=4 * one, right=one, hanging=3 * one)
                 run = p.add_run(line)
                 _set_run_font(run, name=fangsong, size_pt=U.PT_4)
+                upper_paras.append(p)
+            # 主送/抄送多段互锁；末段再与印发行同页（Word：行末段 keep_with_next）
+            for i, p in enumerate(upper_paras):
+                if i < len(upper_paras) - 1 or has_print:
+                    p.paragraph_format.keep_with_next = True
 
-        left_c, right_c = print_row.cells[0], print_row.cells[1]
-        _set_tc_width(left_c, half)
-        _set_tc_width(right_c, body_w - half)
+        if has_print:
+            print_row = table.rows[1] if has_upper else table.rows[0]
+            left_c, right_c = print_row.cells[0], print_row.cells[1]
+            _set_tc_width(left_c, half)
+            _set_tc_width(right_c, body_w - half)
 
-        # §7.4.3：机关左空一字、日期右空一字（绝对 twips，不写进正文全角空格）
-        p_l = _cell_para(left_c, clear=True)
-        p_l.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        _set_ind(p_l, left=one)
-        org = (ir.print_org or "").strip()
-        r1 = p_l.add_run(org)
-        _set_run_font(r1, name=fangsong, size_pt=U.PT_4)
+            # §7.4.3：机关左空一字、日期右空一字（绝对 twips，不写进正文全角空格）
+            p_l = _cell_para(left_c, clear=True)
+            p_l.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            _set_ind(p_l, left=one)
+            p_l.paragraph_format.keep_together = True
+            org = (ir.print_org or "").strip()
+            r1 = p_l.add_run(org)
+            _set_run_font(r1, name=fangsong, size_pt=U.PT_4)
 
-        p_r = _cell_para(right_c, clear=True)
-        p_r.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        _set_ind(p_r, right=one)
-        print_date = (ir.print_date or "").strip()
-        if print_date and not print_date.endswith("印发"):
-            print_date = print_date + "印发"
-        r2 = p_r.add_run(print_date)
-        _set_run_font(r2, name=fangsong, size_pt=U.PT_4)
+            p_r = _cell_para(right_c, clear=True)
+            p_r.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _set_ind(p_r, right=one)
+            p_r.paragraph_format.keep_together = True
+            print_date = (ir.print_date or "").strip()
+            if print_date and not print_date.endswith("印发"):
+                print_date = print_date + "印发"
+            r2 = p_r.add_run(print_date)
+            _set_run_font(r2, name=fangsong, size_pt=U.PT_4)

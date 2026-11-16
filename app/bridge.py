@@ -18,7 +18,8 @@ from app.session import AppSession
 from core.body_structure.parser import renumber_blocks
 from core.config_loader import load_config, project_root
 from core.ir.builder import split_names
-from core.ir.schema import AttachmentDocx, BodyBlock, LayoutIR, ModelOutput, SealMode
+from core.ir.minutes import format_issue_no, normalize_name_list
+from core.ir.schema import AttachmentDocx, BodyBlock, DocKind, LayoutIR, ModelOutput, SealMode
 from core.layout import DocxEngine
 from core.layout.office_preview import render_docx_preview
 from core.recognize import create_recognizer
@@ -56,6 +57,7 @@ class BackendBridge(QObject):
         return {
             "ok": True,
             "recognizer": self.session.recognizer_name,
+            "doc_kind": ir.doc_kind.value if ir.doc_kind else DocKind.GENERAL.value,
             "fields": {
                 "copy_number": ir.copy_number,
                 "secret_combo": (
@@ -67,6 +69,7 @@ class BackendBridge(QObject):
                 "issuer_sign": "、".join(ir.signers),
                 "org_mark": "、".join(ir.org_marks),
                 "doc_number": ir.doc_number,
+                "issue_no": format_issue_no(ir.issue_no) or ir.issue_no,
                 "title": ir.title,
                 "recipient": ir.recipient,
                 "attachment_caption": ir.attachment_caption,
@@ -76,6 +79,11 @@ class BackendBridge(QObject):
                 "cc_recipients": ir.cc_recipients,
                 "print_org": ir.print_org,
                 "print_date": ir.print_date,
+                "attendance": ir.attendance,
+                "leave": ir.leave,
+                "liexi": ir.liexi,
+                "attendance_absent_confirmed": bool(ir.attendance_absent_confirmed),
+                "recipients_in_footer": bool(ir.recipients_in_footer),
             },
             "body_tree": [b.to_dict() for b in ir.body_tree],
         }
@@ -184,6 +192,14 @@ class BackendBridge(QObject):
         if not text:
             return json.dumps({"ok": False, "error": "请先粘贴或导入文稿"}, ensure_ascii=False)
         try:
+            from core.recognize.minutes_regex import try_recognize_minutes
+
+            minutes_model = try_recognize_minutes(text)
+            if minutes_model is not None:
+                self.session.recognizer_name = "minutes-regex"
+                self.session.apply_model(minutes_model, source_text=text)
+                return json.dumps(self._build_recognize_payload(), ensure_ascii=False)
+
             self._ensure_recognizer()
             model = self.recognizer.recognize(text)
             self.session.apply_model(model, source_text=text)
@@ -192,7 +208,17 @@ class BackendBridge(QObject):
             return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
 
     def _run_recognize_job(self, text: str):
-        """线程池任务：返回 (recognizer, name, model) 或抛错。"""
+        """线程池任务：返回 (recognizer, name, model) 或抛错。
+
+        纪要文先走正则，完全绕过 ONNX + SDK postprocess（避免卡死）。
+        """
+        from core.recognize.minutes_regex import try_recognize_minutes
+
+        minutes_model = try_recognize_minutes(text)
+        if minutes_model is not None:
+            # 不替换 self.recognizer；仅本趟用正则结果
+            return self.recognizer, "minutes-regex", minutes_model
+
         rec = self.recognizer
         name = self.session.recognizer_name
         if rec is None or name in ("pending", "onnx(延迟加载)"):
@@ -260,7 +286,13 @@ class BackendBridge(QObject):
             if missing:
                 return json.dumps({"ok": False, "error": "缺少：" + "、".join(missing)}, ensure_ascii=False)
 
-            default_name = (self.session.ir.doc_number or "导出公文").replace("/", "-") + ".docx"
+            ir = self.session.ir
+            if ir.is_minutes():
+                from core.ir.minutes import minutes_export_basename
+
+                default_name = minutes_export_basename(ir)
+            else:
+                default_name = (ir.doc_number or "导出公文").replace("/", "-") + ".docx"
             out_dir = project_root() / "examples" / "out"
             out_dir.mkdir(parents=True, exist_ok=True)
             suggested = str(out_dir / default_name)
@@ -281,19 +313,27 @@ class BackendBridge(QObject):
     def _preview_job(ir_data: dict, tmp_dir: str) -> dict:
         """后台线程：写 docx + Office 渲页图（勿在主线程做）。"""
         seal = ir_data.get("seal_mode")
+        kind = ir_data.get("doc_kind") or DocKind.GENERAL.value
         body = [BodyBlock.from_dict(x) for x in (ir_data.get("body_tree") or [])]
         atts = [
             AttachmentDocx.from_dict(x) if isinstance(x, dict) else AttachmentDocx(name=str(x))
             for x in (ir_data.get("attachments") or [])
         ]
-        skip = {"seal_mode", "body_tree", "attachments"}
+        skip = {"seal_mode", "doc_kind", "body_tree", "attachments"}
         kwargs = {
             k: v
             for k, v in ir_data.items()
             if k in LayoutIR.__dataclass_fields__ and k not in skip
         }
         ir = LayoutIR(**kwargs)
-        ir.seal_mode = SealMode(seal) if seal else None
+        try:
+            ir.doc_kind = DocKind(kind)
+        except ValueError:
+            ir.doc_kind = DocKind.GENERAL
+        if ir.is_minutes():
+            ir.seal_mode = None
+        else:
+            ir.seal_mode = SealMode(seal) if seal else None
         ir.body_tree = body
         ir.attachments = atts
         docx_path = Path(tmp_dir) / "preview.docx"
@@ -382,11 +422,23 @@ class BackendBridge(QObject):
         else:
             ir.secret_level, ir.secret_period = secret.strip(), ""
 
+        kind_raw = data.get("doc_kind") or fields.get("doc_kind") or DocKind.GENERAL.value
+        try:
+            ir.doc_kind = DocKind(str(kind_raw))
+        except ValueError:
+            ir.doc_kind = DocKind.GENERAL
+
         ir.copy_number = str(fields.get("copy_number") or "").strip()
         ir.urgency = str(fields.get("urgency") or "").strip()
         ir.signers = split_names(str(fields.get("issuer_sign") or ""))
-        ir.org_marks = split_names(str(fields.get("org_mark") or ""))
+        org_raw = str(fields.get("org_mark") or "").strip()
+        # 纪要标志通常整串含顿号机关名，勿按顿号拆成多标志
+        if ir.is_minutes():
+            ir.org_marks = [org_raw] if org_raw else []
+        else:
+            ir.org_marks = split_names(org_raw)
         ir.doc_number = str(fields.get("doc_number") or "").strip()
+        ir.issue_no = format_issue_no(str(fields.get("issue_no") or ""))
         ir.title = str(fields.get("title") or "").strip()
         ir.recipient = str(fields.get("recipient") or "").strip()
         ir.attachment_caption = str(fields.get("attachment_caption") or "").strip()
@@ -396,11 +448,24 @@ class BackendBridge(QObject):
         ir.cc_recipients = str(fields.get("cc_recipients") or "").strip()
         ir.print_org = str(fields.get("print_org") or "").strip()
         ir.print_date = str(fields.get("print_date") or "").strip()
+        ir.attendance = normalize_name_list(str(fields.get("attendance") or ""))
+        ir.leave = normalize_name_list(str(fields.get("leave") or ""))
+        ir.liexi = normalize_name_list(str(fields.get("liexi") or ""))
+        ir.attendance_absent_confirmed = bool(
+            fields.get("attendance_absent_confirmed")
+            or (data.get("absent_flags") or {}).get("f-attendance")
+            or (data.get("absent_flags") or {}).get("attendance")
+        )
         ir.recipients_in_footer = bool(fields.get("recipients_in_footer"))
+        if ir.is_minutes() and ir.recipient.strip():
+            ir.recipients_in_footer = True
         ir.absent_flags = dict(data.get("absent_flags") or {})
 
         seal = data.get("seal_mode")
-        ir.seal_mode = SealMode(seal) if seal else None
+        if ir.is_minutes():
+            ir.seal_mode = None
+        else:
+            ir.seal_mode = SealMode(seal) if seal else None
 
         body = data.get("body_tree") or []
         ir.body_tree = [BodyBlock.from_dict(x) for x in body]

@@ -12,6 +12,11 @@ class SealMode(str, Enum):
     NO_STAMP = "no_stamp_layout"
 
 
+class DocKind(str, Enum):
+    GENERAL = "general"
+    MINUTES = "minutes"
+
+
 @dataclass
 class HeaderFields:
     copy_number: str = ""
@@ -154,6 +159,7 @@ class LayoutIR:
 
     # 确认页 / LayoutIR 扩展
     seal_mode: SealMode | None = None
+    doc_kind: DocKind = DocKind.GENERAL
     recipients_in_footer: bool = False
     signers: list[str] = field(default_factory=list)
     org_marks: list[str] = field(default_factory=list)
@@ -161,6 +167,13 @@ class LayoutIR:
     body_tree: list[BodyBlock] = field(default_factory=list)
     # 上传的附件正文（另页：附件N + 空行 + 原文）
     attachments: list[AttachmentDocx] = field(default_factory=list)
+
+    # 纪要扩展（标志复用 org_marks[0]）
+    issue_no: str = ""
+    attendance: str = ""
+    leave: str = ""
+    liexi: str = ""
+    attendance_absent_confirmed: bool = False
 
     # 选填确认（字段名 → 是否确认无此项）
     absent_flags: dict[str, bool] = field(default_factory=dict)
@@ -170,8 +183,21 @@ class LayoutIR:
             return self.org_marks[0]
         return ""
 
+    def is_minutes(self) -> bool:
+        return self.doc_kind == DocKind.MINUTES
+
     def missing_required(self) -> list[str]:
-        missing: list[str] = []
+        if self.is_minutes():
+            missing: list[str] = []
+            if not self.primary_org_mark().strip():
+                missing.append("纪要标志")
+            if not any(b.text.strip() for b in self.body_tree):
+                missing.append("正文")
+            if not self.attendance.strip() and not self.attendance_absent_confirmed:
+                missing.append("出席名单")
+            return missing
+
+        missing = []
         if not (self.org_marks or [""])[0].strip():
             missing.append("发文机关标志")
         if not self.doc_number.strip():
@@ -195,5 +221,6 @@ class LayoutIR:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["seal_mode"] = self.seal_mode.value if self.seal_mode else None
+        d["doc_kind"] = self.doc_kind.value if self.doc_kind else DocKind.GENERAL.value
         d["attachments"] = [a.to_dict() if hasattr(a, "to_dict") else dict(a) for a in self.attachments]
         return d

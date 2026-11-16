@@ -100,6 +100,13 @@ class OnnxFieldRecognizer:
 
     def recognize(self, text: str) -> ModelOutput:
         text = text or ""
+        # 纪要：正则短路，避免 SDK postprocess 在「出席/附件」文上卡死
+        from core.recognize.minutes_regex import try_recognize_minutes
+
+        minutes_model = try_recognize_minutes(text)
+        if minutes_model is not None:
+            return minutes_model
+
         raw = self._extractor.extract(text, SDK_SCHEMA)
         raw = self._postprocess(raw, text)
         # SDK「只填空」改不了模型错值；本层用原文强规则审查覆盖
