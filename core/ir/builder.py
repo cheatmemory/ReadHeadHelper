@@ -25,8 +25,42 @@ def model_to_partial_ir(model: ModelOutput, source_text: str = "") -> LayoutIR:
     """把模型 JSON 映射为可编辑的 LayoutIR（不含 seal_mode）。"""
     body_paras = list(model.main.body_blocks or [])
     if not body_paras and source_text:
-        # 兜底：用全文按空行切，后续确认页/结构工具再改
-        body_paras = [p.strip() for p in re.split(r"\n\s*\n", source_text) if p.strip()]
+        # 兜底仍走正文抽取，禁止把密级/标志/名单整篇灌进正文
+        from core.body_structure.extract import extract_body_paragraphs
+
+        body_paras = extract_body_paragraphs(
+            source_text,
+            title=model.main.title,
+            recipient=model.main.recipient,
+            date=model.footer.date,
+            org_signature=model.footer.org_signature,
+            org_mark=model.header.org_mark,
+        )
+        if not body_paras:
+            # 再退一步：按单行切，仍滤版头并在名单/附件处截断
+            from core.body_structure.extract import (
+                _ATTACH,
+                _CC,
+                _MINUTES_LIST,
+                _NOTE,
+                _is_header_noise_line,
+            )
+
+            mark = model.header.org_mark
+            tit = model.main.title
+            kept: list[str] = []
+            stripping = True
+            for ln in source_text.splitlines():
+                s = ln.strip()
+                if not s:
+                    continue
+                if _ATTACH.match(s) or _CC.match(s) or _NOTE.match(s) or _MINUTES_LIST.match(s):
+                    break
+                if stripping and _is_header_noise_line(s, org_mark=mark, title=tit):
+                    continue
+                stripping = False
+                kept.append(s)
+            body_paras = kept
 
     org_marks = split_names(model.header.org_mark)
     signers = split_names(model.header.issuer_sign)

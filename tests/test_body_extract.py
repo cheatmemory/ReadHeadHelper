@@ -5,6 +5,7 @@ from core.body_structure.extract import extract_body_paragraphs
 from core.body_structure.parser import parse_body_blocks
 from core.config_loader import load_config, project_root
 from core.ir.builder import model_to_partial_ir
+from core.ir.schema import ModelOutput
 from core.recognize.factory import create_recognizer
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -124,6 +125,59 @@ def test_glued_header_body_keeps_body_span():
     # 不应只剩最后一句
     assert len(joined) > 80
     assert not joined.startswith("市城管局")
+
+
+def test_minutes_body_strips_secret_mark_and_list():
+    """纪要：正文不得含密级/标志/主送短行/出席名单；日期叙事句不能截断正文窗。"""
+    text = (
+        "机密★10年\n"
+        "临汾市自然资源和规划局工作会议纪要\n"
+        "局属各单位：\n"
+        "2025年11月25日下午，局长曹文静主持召开工作会议，研究食品安全监管工作。\n"
+        "一、会议调度了食品安全监管进展情况。会议原则同意，要求进一步核实数据。\n"
+        "二、会议研究了食品安全监管有关问题。会议要求建立台账。\n"
+        "出席：崔美玲（局长）、韦雅琴（副局长）\n"
+        "请假：毛雅琴（办公室主任）\n"
+        "列席：尹建华（局长）\n"
+        "2025年11月25日\n"
+        "（此件发至县团级）\n"
+        "临汾市自然资源和规划局 2025年11月27日印发\n"
+    )
+    mark = "临汾市自然资源和规划局工作会议纪要"
+    paras = extract_body_paragraphs(
+        text,
+        date="2025年11月25日",
+        org_mark=mark,
+    )
+    joined = "\n".join(paras)
+    assert paras
+    assert "2025年11月25日下午" in paras[0]
+    assert "一、会议调度" in joined
+    assert "机密" not in joined
+    assert mark not in joined
+    assert "局属各单位" not in joined
+    assert "出席" not in joined
+    assert "印发" not in joined
+
+    # body_blocks 为空时 builder 也不得整篇回灌
+    model = ModelOutput.from_dict(
+        {
+            "header": {
+                "org_mark": mark,
+                "secret_level": "机密",
+                "secret_period": "10年",
+            },
+            "main": {"title": "", "recipient": "局属各单位", "body_blocks": []},
+            "footer": {"date": "2025年11月25日"},
+        }
+    )
+    ir = model_to_partial_ir(model, source_text=text)
+    body = "\n".join(b.text for b in ir.body_tree)
+    assert "机密" not in body
+    assert mark not in body
+    assert "局属各单位" not in body
+    assert "出席" not in body
+    assert "一、会议调度" in body
 
 
 def test_footer_org_does_not_steal_start():

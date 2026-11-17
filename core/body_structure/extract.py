@@ -38,6 +38,15 @@ _PRINT_TAIL = re.compile(r"印发\s*$")
 _PRINT_ANY = re.compile(r".{2,40}印发\s*$", re.M)
 _DOC_NO = re.compile(r"[〔\[]\d{4}[〕\]].*号")
 _RECIP_TAIL = re.compile(r"各[^：:\n]{0,60}[：:]")
+_MINUTES_LIST = re.compile(r"^(出席|请假|列席)\s*[:：]")
+_MINUTES_LIST_ANY = re.compile(r"(?:^|\n)(出席|请假|列席)\s*[:：]")
+_SECRET_LINE = re.compile(
+    r"^(绝密|机密|秘密)(?:\s*[★*]\s*(长期|\d{1,3}年|\d{1,3}个月))?$"
+)
+_URGENCY_LINE = re.compile(r"^(特提|特急|加急|平急)(?:文件)?$")
+_COPY_LINE = re.compile(r"^\d{6}$")
+_ISSUE_LINE = re.compile(r"^第\s*\d+\s*期$")
+_MARK_LINE = re.compile(r"^[\u4e00-\u9fa5A-Za-z0-9（）()\-·、]{2,40}纪要$")
 
 
 def _flat(s: str) -> str:
@@ -291,6 +300,48 @@ def _skip_colon_ws(text: str, pos: int) -> int:
     return pos
 
 
+def _is_standalone_date_at(text: str, start: int, end: int) -> bool:
+    """成文日期锚点：必须像独立日期，排除「2025年11月25日下午…」正文起句。"""
+    n = len(text or "")
+    if start < 0 or end > n or end <= start:
+        return False
+    left = text[start - 1] if start > 0 else "\n"
+    right = text[end] if end < n else "\n"
+    if left not in "\n\r\t\u3000 ":
+        return False
+    # 日期后若紧跟「下午/上午/晚上/召开」等，是正文叙事，不是落款日期
+    tail = text[end : end + 4]
+    if re.match(r"^(上午|下午|晚上|傍晚|召开|，|,|、)", tail):
+        return False
+    if right not in "\n\r\t\u3000 （(":
+        return False
+    return True
+
+
+def _is_header_noise_line(s: str, *, org_mark: str = "", title: str = "") -> bool:
+    """文首版头行：不应进入正文。"""
+    t = (s or "").replace("\u3000", " ").strip()
+    if not t:
+        return True
+    if _COPY_LINE.fullmatch(t) or _SECRET_LINE.fullmatch(t) or _URGENCY_LINE.fullmatch(t):
+        return True
+    if _ISSUE_LINE.fullmatch(t):
+        return True
+    if _MARK_LINE.fullmatch(t):
+        return True
+    flat_t = _flat(_norm_punct(t)).rstrip("：:")
+    for needle in (org_mark, title):
+        n = _flat(_norm_punct(needle or "")).rstrip("：:")
+        if n and len(n) >= 4 and (flat_t == n or flat_t.startswith(n) and len(flat_t) <= len(n) + 2):
+            return True
+    # 单独主送/抄送式短行（如「局属各单位：」）
+    if (t.endswith("：") or t.endswith(":")) and len(t) <= 40 and not _is_struct_line(t):
+        if "如下" in t:
+            return False
+        return True
+    return False
+
+
 def _after_field(text: str, start: int, field_len: int) -> int:
     """字段结束后跳过空白与全角/半角冒号。"""
     return _skip_colon_ws(text, start + field_len)
@@ -360,35 +411,61 @@ def _resolve_char_window(
     start = max(0, min(start, n))
     start = _skip_colon_ws(text, start)
 
-    # ---- end：起点之后最早的落款/附件类锚点 ----
+    # ---- end：起点之后最早的落款/附件/纪要名单类锚点 ----
     ends: list[int] = []
-    for key in ("附件说明", "发文机关署名", "成文日期", "附注", "抄送机关", "印发机关", "印发日期"):
+    for key in (
+        "附件说明",
+        "发文机关署名",
+        "成文日期",
+        "附注",
+        "抄送机关",
+        "印发机关",
+        "印发日期",
+        "出席",
+        "请假",
+        "列席",
+    ):
         for sp in _items_to_spans(result, key):
             if sp.start <= start:
                 continue
-            if key == "成文日期" and sp.start < n * 0.35:
-                continue
+            if key == "成文日期":
+                if sp.start < n * 0.35:
+                    continue
+                if not _is_standalone_date_at(text, sp.start, sp.end):
+                    continue
             ends.append(sp.start)
 
-    for rx in (_ATTACH_ANY, _CC_ANY, _NOTE_ANY):
+    for rx in (_ATTACH_ANY, _CC_ANY, _NOTE_ANY, _MINUTES_LIST_ANY):
         m = rx.search(text, start)
         if m:
-            ends.append(m.start())
+            # （?:^|\n）分组时定位到名目字
+            pos = m.start(1) if (rx is _MINUTES_LIST_ANY and m.lastindex) else m.start()
+            if pos >= start:
+                ends.append(pos)
 
     needle_date = (date or _first_text(result, "成文日期")).strip()
     if needle_date:
-        hit = _find_substr(text, needle_date, lo=start, hi=n)
-        if hit is not None and hit > start:
-            ends.append(hit)
+        # 可能多次出现：只收「独立日期行」的命中
+        pos = start
+        while True:
+            hit = _find_substr(text, needle_date, lo=pos, hi=n)
+            if hit is None or hit <= start:
+                break
+            hit_end = hit + len(needle_date)
+            # 去空白匹配时长度可能对不齐，用 _DATE_ANY 在 hit 处再量一次
+            m_at = _DATE_ANY.match(text, hit)
+            if m_at:
+                hit_end = m_at.end()
+            if _is_standalone_date_at(text, hit, hit_end):
+                ends.append(hit)
+                break
+            pos = hit + 1
     else:
         m = _DATE_ANY.search(text, start)
-        # 成文日期多在后半；跳过正文里「到2026年底」类
+        # 成文日期多在后半；跳过正文里「到2026年底」「11月25日下午」类
         while m:
             if m.start() >= start + max(30, int((n - start) * 0.25)):
-                # 前后像独立日期行
-                left = text[m.start() - 1] if m.start() > 0 else "\n"
-                right = text[m.end()] if m.end() < n else "\n"
-                if left in "\n\r　 \t" and right in "\n\r　 \t（(":
+                if _is_standalone_date_at(text, m.start(), m.end()):
                     ends.append(m.start())
                     break
             m = _DATE_ANY.search(text, m.end())
@@ -487,21 +564,25 @@ def extract_body_paragraphs(
     recipient: str = "",
     date: str = "",
     org_signature: str = "",
+    org_mark: str = "",
     sdk_result: dict[str, Any] | None = None,
 ) -> list[str]:
     """标题/主送之后、附件/落款之前 → 正文段落列表。
 
     窗口按字符切，避免「主送与正文同一行」时整段正文被丢到窗外。
+    ONNX 只标字段、不标正文；本函数负责裁掉版头/落款。
     """
     text = text or ""
     if not text.strip():
         return []
 
     sdk_result = sdk_result or {}
+    mark = (org_mark or _first_text(sdk_result, "发文机关标志")).strip()
+    tit = (title or _first_text(sdk_result, "标题")).strip()
     c0, c1 = _resolve_char_window(
         text,
         result=sdk_result,
-        title=title,
+        title=tit,
         recipient=recipient,
         date=date,
         org_signature=org_signature,
@@ -515,14 +596,19 @@ def extract_body_paragraphs(
     ).rstrip("：:")
 
     filtered: list[str] = []
+    header_strip = True
     for s in body_lines:
         if not s:
             continue
         # 主送冒号被切进正文窗时的孤儿行
         if s in ("：", ":"):
             continue
-        if _ATTACH.match(s) or _CC.match(s) or _NOTE.match(s):
+        if _ATTACH.match(s) or _CC.match(s) or _NOTE.match(s) or _MINUTES_LIST.match(s):
             break
+        # 窗起点偏前时，连续丢掉文首版头/标志/主送短行
+        if header_strip and _is_header_noise_line(s, org_mark=mark, title=tit):
+            continue
+        header_strip = False
         # 行内残余「附件：…」截断
         m_att = _ATTACH_ANY.search(s)
         if m_att and m_att.start() > 0:
@@ -557,8 +643,12 @@ def extract_body_paragraphs(
     if split_out:
         return split_out
 
-    # 最后兜底：字符窗本身
-    mid = [ln.strip() for ln in chunk.splitlines() if ln.strip()]
+    # 最后兜底：字符窗本身（仍滤版头噪声，禁止回退成全文）
+    mid = [
+        ln.strip()
+        for ln in chunk.splitlines()
+        if ln.strip() and not _is_header_noise_line(ln.strip(), org_mark=mark, title=tit)
+    ]
     if mid:
         return mid
-    return [chunk.strip()] if chunk.strip() and len(chunk.strip()) < 80 else []
+    return []

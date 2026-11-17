@@ -7,14 +7,22 @@ import sys
 from pathlib import Path
 
 from core.body_structure.extract import extract_body_paragraphs
+from core.ir.minutes import format_issue_no, looks_like_minutes, normalize_name_list
 from core.ir.schema import ModelOutput
 from core.recognize.review import review_and_correct
 
-# SDK 中文 schema（不可改名）
+# SDK 中文 schema（不可改名）——通用 16 字段（V4）
 SDK_SCHEMA = [
     "份号", "密级", "保密期限", "紧急程度", "发文机关标志", "发文字号",
     "标题", "主送机关", "附件说明", "发文机关署名", "成文日期",
-    "附注", "抄送机关", "印发机关", "印发日期",
+    "附注", "抄送机关", "印发机关", "印发日期", "签发人",
+]
+
+# 会议纪要 17 字段（V4）：无发文字号/签发人/发文机关署名，含期号与三类名单
+SDK_SCHEMA_MINUTES = [
+    "份号", "密级", "保密期限", "紧急程度", "发文机关标志", "期号",
+    "标题", "主送机关", "附件说明", "出席", "请假", "列席",
+    "成文日期", "附注", "抄送机关", "印发机关", "印发日期",
 ]
 
 
@@ -27,6 +35,19 @@ def _first(result: dict, key: str) -> str:
     if not items:
         return ""
     return _clean(items[0].get("text", ""))
+
+
+def _join_name_field(result: dict, key: str) -> str:
+    """出席/请假/列席：合并多 span，顿号归一。"""
+    items = result.get(key) or []
+    parts: list[str] = []
+    for it in items:
+        t = _clean(str(it.get("text") or ""))
+        if t:
+            parts.append(t)
+    if not parts:
+        return ""
+    return normalize_name_list("、".join(parts))
 
 
 def _join_attachment_captions(result: dict) -> str:
@@ -62,8 +83,10 @@ def _guess_body_blocks(text: str, result: dict) -> list[str]:
         recipient=_first(result, "主送机关"),
         date=_first(result, "成文日期"),
         org_signature=_first(result, "发文机关署名"),
+        org_mark=_first(result, "发文机关标志"),
         sdk_result=result,
     )
+
 
 class OnnxFieldRecognizer:
     def __init__(
@@ -100,24 +123,29 @@ class OnnxFieldRecognizer:
 
     def recognize(self, text: str) -> ModelOutput:
         text = text or ""
-        # 纪要：正则短路，避免 SDK postprocess 在「出席/附件」文上卡死
-        from core.recognize.minutes_regex import try_recognize_minutes
+        as_minutes = looks_like_minutes(source_text=text)
+        schema = SDK_SCHEMA_MINUTES if as_minutes else SDK_SCHEMA
 
-        minutes_model = try_recognize_minutes(text)
-        if minutes_model is not None:
-            return minutes_model
-
-        raw = self._extractor.extract(text, SDK_SCHEMA)
+        raw = self._extractor.extract(text, schema)
         raw = self._postprocess(raw, text)
         # SDK「只填空」改不了模型错值；本层用原文强规则审查覆盖
-        raw = review_and_correct(raw, text)
+        if not as_minutes:
+            raw = review_and_correct(raw, text)
         self._last_sdk_result = raw
+
+        # 抽取后若标志/标题表明纪要，仍按纪要字段挂载
+        org_mark = _first(raw, "发文机关标志")
+        title = _first(raw, "标题")
+        as_minutes = as_minutes or looks_like_minutes(
+            org_marks=[org_mark] if org_mark else None,
+            title=title,
+            source_text=text,
+        )
 
         secret = _first(raw, "密级")
         period = _first(raw, "保密期限")
         # 国标展示常用 密级★期限；期限单独保留
         if period and "★" in secret:
-            # 已合并
             parts = secret.split("★", 1)
             secret, period = parts[0], parts[1] if len(parts) > 1 else period
 
@@ -128,12 +156,12 @@ class OnnxFieldRecognizer:
                 "secret_level": secret,
                 "secret_period": period,
                 "urgency": _first(raw, "紧急程度"),
-                "issuer_sign": "",  # SDK 当前 schema 无签发人；确认页补
-                "org_mark": _first(raw, "发文机关标志"),
-                "doc_number": _first(raw, "发文字号"),
+                "issuer_sign": _first(raw, "签发人"),
+                "org_mark": org_mark,
+                "doc_number": "" if as_minutes else _first(raw, "发文字号"),
             },
             "main": {
-                "title": _first(raw, "标题"),
+                "title": title,
                 "recipient": _first(raw, "主送机关"),
                 "body_blocks": body_blocks,
                 "attachment_caption": _join_attachment_captions(raw),
@@ -142,12 +170,16 @@ class OnnxFieldRecognizer:
                 "date": _first(raw, "成文日期"),
                 "note": _first(raw, "附注"),
                 "attachment": "",
-                "org_signature": _first(raw, "发文机关署名"),
+                "org_signature": "" if as_minutes else _first(raw, "发文机关署名"),
                 "print_org": _first(raw, "印发机关"),
                 "print_date": _first(raw, "印发日期"),
             },
         }
         model = ModelOutput.from_dict(data)
-        # 把 SDK 抄送挂到 note 旁通道：由 factory/上层写入 LayoutIR.cc
         model._sdk_cc = _first(raw, "抄送机关")  # type: ignore[attr-defined]
+        if as_minutes:
+            model._minutes_issue_no = format_issue_no(_first(raw, "期号"))  # type: ignore[attr-defined]
+            model._minutes_attendance = _join_name_field(raw, "出席")  # type: ignore[attr-defined]
+            model._minutes_leave = _join_name_field(raw, "请假")  # type: ignore[attr-defined]
+            model._minutes_liexi = _join_name_field(raw, "列席")  # type: ignore[attr-defined]
         return model
