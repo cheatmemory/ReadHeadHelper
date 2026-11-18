@@ -42,11 +42,11 @@ def test_start_recognize_emits_finished(qapp):
     )
 
     class FakeRec:
-        def recognize(self, text):
+        def recognize(self, text, *, with_trace: bool = False):
             return fake
 
     bridge.recognizer = FakeRec()
-    bridge.session.recognizer_name = "mock"
+    bridge.session.recognizer_name = "fake"
 
     got: list[dict] = []
 

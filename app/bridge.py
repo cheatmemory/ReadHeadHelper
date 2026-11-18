@@ -111,7 +111,7 @@ class BackendBridge(QObject):
         name = self.session.recognizer_name
         if name == "pending":
             enabled = bool((self.config.get("model") or {}).get("enabled", True))
-            name = "onnx(延迟加载)" if enabled else "mock"
+            name = "onnx(延迟加载)" if enabled else "未启用"
         return json.dumps(
             {
                 "name": "公文排版助手",
@@ -226,11 +226,7 @@ class BackendBridge(QObject):
         if rec is None or name in ("pending", "onnx(延迟加载)"):
             rec, name = create_recognizer(self.config, project_root())
         trace_on = self._field_trace_enabled()
-        # Mock 无 with_trace 参数时降级
-        try:
-            model = rec.recognize(text, with_trace=trace_on)
-        except TypeError:
-            model = rec.recognize(text)
+        model = rec.recognize(text, with_trace=trace_on)
         ft = getattr(rec, "_last_field_trace", None) if trace_on else None
         bt = getattr(rec, "_last_body_trace", None) if trace_on else None
         return rec, name, model, ft, bt

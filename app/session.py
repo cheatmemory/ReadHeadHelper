@@ -11,7 +11,7 @@ class AppSession:
     raw_text: str = ""
     model: ModelOutput = field(default_factory=ModelOutput)
     ir: LayoutIR = field(default_factory=LayoutIR)
-    recognizer_name: str = "mock"
+    recognizer_name: str = "pending"
     last_export_path: str = ""
     # 开发者溯源（debug.field_trace 开启时填充）
     field_trace: dict | None = None

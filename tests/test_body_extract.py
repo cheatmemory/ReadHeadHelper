@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
 
+import pytest
+
 from core.body_structure.extract import extract_body_paragraphs
 from core.body_structure.parser import parse_body_blocks
 from core.config_loader import load_config, project_root
@@ -9,6 +11,12 @@ from core.ir.schema import ModelOutput
 from core.recognize.factory import create_recognizer
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _require_onnx():
+    onnx = project_root() / "third_party" / "govdoc-sdk" / "model.onnx"
+    if not onnx.is_file():
+        pytest.skip("缺少 model.onnx，跳过 ONNX 端到端用例")
 
 
 def test_jiangcheng_messy_structure():
@@ -35,6 +43,7 @@ def test_jiangcheng_messy_structure():
 
 def test_jiangcheng_with_onnx_offsets():
     """端到端：模型偏移锚定 + 脏样本不应整篇一段。"""
+    _require_onnx()
     text = (ROOT / "fixtures" / "sample_text" / "jiangcheng_messy.txt").read_text(encoding="utf-8")
     rec, name = create_recognizer(load_config(), project_root())
     model = rec.recognize(text)

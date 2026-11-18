@@ -35,7 +35,7 @@ class ImportPage(QWidget):
         title_box = QVBoxLayout()
         t = QLabel("导入文稿")
         t.setStyleSheet("font-size:20px;font-weight:700;")
-        s = QLabel("粘贴纯文本，或上传 docx（仅抽取文本）。识别走本地 Mock/ONNX，不上传网络。")
+        s = QLabel("粘贴纯文本，或上传 docx（仅抽取文本）。识别走本地 ONNX，不上传网络。")
         s.setObjectName("Hint")
         s.setWordWrap(True)
         title_box.addWidget(t)

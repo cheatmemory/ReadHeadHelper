@@ -9,7 +9,7 @@ debug:
   field_trace: true
 
 model:
-  # false 时强制 Mock；true 时优先加载 ONNX，失败则回退 Mock
+  # false 时拒绝识别（直接报错）；true 时加载 ONNX，模型缺失或加载失败亦直接报错
   enabled: true
   onnx_path: third_party/govdoc-sdk/model.onnx
   vocab_path: third_party/govdoc-sdk/vocab.txt

@@ -1,17 +1,22 @@
 # -*- coding: utf-8 -*-
+import json
 from pathlib import Path
 
 from core.ir.builder import build_layout_ir
-from core.ir.schema import SealMode
+from core.ir.schema import ModelOutput, SealMode
 from core.layout import DocxEngine
-from core.recognize import MockFieldRecognizer
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_mock_to_docx(tmp_path):
+def _fixture_model(name: str = "downlink_stamp.json") -> ModelOutput:
+    data = json.loads((ROOT / "fixtures" / "mock_json" / name).read_text(encoding="utf-8"))
+    return ModelOutput.from_dict(data)
+
+
+def test_fixture_to_docx(tmp_path):
     text = (ROOT / "fixtures" / "sample_text" / "downlink.txt").read_text(encoding="utf-8")
-    model = MockFieldRecognizer().recognize(text)
+    model = _fixture_model()
     ir = build_layout_ir(model, seal_mode=SealMode.STAMP, source_text=text)
     assert not ir.missing_required()
     out = tmp_path / "t.docx"
@@ -24,7 +29,7 @@ def test_margins_in_docx(tmp_path):
     from core.layout import units as U
 
     text = (ROOT / "fixtures" / "sample_text" / "downlink.txt").read_text(encoding="utf-8")
-    model = MockFieldRecognizer().recognize(text)
+    model = _fixture_model()
     ir = build_layout_ir(model, seal_mode=SealMode.NO_STAMP, source_text=text)
     out = tmp_path / "m.docx"
     DocxEngine().render(ir, out)
@@ -91,7 +96,7 @@ def test_copy_number_uses_fangsong(tmp_path):
     from xml.etree import ElementTree as ET
 
     text = (ROOT / "fixtures" / "sample_text" / "downlink.txt").read_text(encoding="utf-8")
-    model = MockFieldRecognizer().recognize(text)
+    model = _fixture_model()
     ir = build_layout_ir(model, seal_mode=SealMode.NO_STAMP, source_text=text)
     ir.copy_number = "000037"
     out = tmp_path / "copy.docx"
@@ -120,7 +125,7 @@ def test_banji_floating_table_gbt_7_4(tmp_path):
     from core.layout import units as U
 
     text = (ROOT / "fixtures" / "sample_text" / "downlink.txt").read_text(encoding="utf-8")
-    model = MockFieldRecognizer().recognize(text)
+    model = _fixture_model()
     ir = build_layout_ir(model, seal_mode=SealMode.NO_STAMP, source_text=text)
     ir.cc_recipients = "市委各部门，市人大常委会办公室，市政协办公室。"
     out = tmp_path / "banji.docx"
@@ -193,7 +198,7 @@ def test_page_numbers_gbt_7_5(tmp_path):
     from docx import Document
 
     text = (ROOT / "fixtures" / "sample_text" / "downlink.txt").read_text(encoding="utf-8")
-    model = MockFieldRecognizer().recognize(text)
+    model = _fixture_model()
     ir = build_layout_ir(model, seal_mode=SealMode.NO_STAMP, source_text=text)
     out = tmp_path / "page.docx"
     DocxEngine().render(ir, out)
