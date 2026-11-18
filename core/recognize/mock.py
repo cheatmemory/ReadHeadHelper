@@ -15,10 +15,14 @@ class MockFieldRecognizer:
         self.fixtures_dir = Path(fixtures_dir) if fixtures_dir else root / "fixtures" / "mock_json"
         self.fixture_path = Path(fixture_path) if fixture_path else self.fixtures_dir / "downlink_stamp.json"
 
-    def recognize(self, text: str) -> ModelOutput:
+    def recognize(self, text: str, *, with_trace: bool = False) -> ModelOutput:
         path = self._pick_fixture(text)
         data = json.loads(path.read_text(encoding="utf-8"))
-        return ModelOutput.from_dict(data)
+        model = ModelOutput.from_dict(data)
+        # Mock 无真实溯源；保持属性以免 bridge 取值报错
+        self._last_field_trace = {"fields": {}} if with_trace else None
+        self._last_body_trace = {} if with_trace else None
+        return model
 
     def _pick_fixture(self, text: str) -> Path:
         t = text or ""

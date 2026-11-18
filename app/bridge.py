@@ -47,6 +47,9 @@ class BackendBridge(QObject):
         self._preview_future = None
         self._preview_tmpdir: str | None = None
 
+    def _field_trace_enabled(self) -> bool:
+        return bool((self.config.get("debug") or {}).get("field_trace", False))
+
     def _ensure_recognizer(self):
         if self.recognizer is not None:
             return
@@ -54,7 +57,7 @@ class BackendBridge(QObject):
 
     def _build_recognize_payload(self) -> dict:
         ir = self.session.ir
-        return {
+        payload = {
             "ok": True,
             "recognizer": self.session.recognizer_name,
             "doc_kind": ir.doc_kind.value if ir.doc_kind else DocKind.GENERAL.value,
@@ -87,6 +90,20 @@ class BackendBridge(QObject):
             },
             "body_tree": [b.to_dict() for b in ir.body_tree],
         }
+        if self._field_trace_enabled():
+            payload["debug_field_trace"] = True
+            payload["field_trace"] = self.session.field_trace or {"fields": {}}
+            payload["body_trace"] = self.session.body_trace or {}
+        return payload
+
+    def _apply_recognizer_traces(self) -> None:
+        rec = self.recognizer
+        if not self._field_trace_enabled() or rec is None:
+            self.session.field_trace = None
+            self.session.body_trace = None
+            return
+        self.session.field_trace = getattr(rec, "_last_field_trace", None)
+        self.session.body_trace = getattr(rec, "_last_body_trace", None)
 
     @Slot(result=str)
     def getAppInfo(self) -> str:
@@ -100,6 +117,7 @@ class BackendBridge(QObject):
                 "name": "公文排版助手",
                 "recognizer": name,
                 "offline": True,
+                "debug_field_trace": self._field_trace_enabled(),
             },
             ensure_ascii=False,
         )
@@ -192,39 +210,30 @@ class BackendBridge(QObject):
         if not text:
             return json.dumps({"ok": False, "error": "请先粘贴或导入文稿"}, ensure_ascii=False)
         try:
-            from core.recognize.minutes_regex import try_recognize_minutes
-
-            minutes_model = try_recognize_minutes(text)
-            if minutes_model is not None:
-                self.session.recognizer_name = "minutes-regex"
-                self.session.apply_model(minutes_model, source_text=text)
-                return json.dumps(self._build_recognize_payload(), ensure_ascii=False)
-
             self._ensure_recognizer()
-            model = self.recognizer.recognize(text)
+            trace_on = self._field_trace_enabled()
+            model = self.recognizer.recognize(text, with_trace=trace_on)
             self.session.apply_model(model, source_text=text)
+            self._apply_recognizer_traces()
             return json.dumps(self._build_recognize_payload(), ensure_ascii=False)
         except Exception as exc:  # noqa: BLE001
             return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
 
     def _run_recognize_job(self, text: str):
-        """线程池任务：返回 (recognizer, name, model) 或抛错。
-
-        纪要文先走正则，完全绕过 ONNX + SDK postprocess（避免卡死）。
-        """
-        from core.recognize.minutes_regex import try_recognize_minutes
-
-        minutes_model = try_recognize_minutes(text)
-        if minutes_model is not None:
-            # 不替换 self.recognizer；仅本趟用正则结果
-            return self.recognizer, "minutes-regex", minutes_model
-
+        """线程池任务：返回 (recognizer, name, model, field_trace, body_trace) 或抛错。"""
         rec = self.recognizer
         name = self.session.recognizer_name
         if rec is None or name in ("pending", "onnx(延迟加载)"):
             rec, name = create_recognizer(self.config, project_root())
-        model = rec.recognize(text)
-        return rec, name, model
+        trace_on = self._field_trace_enabled()
+        # Mock 无 with_trace 参数时降级
+        try:
+            model = rec.recognize(text, with_trace=trace_on)
+        except TypeError:
+            model = rec.recognize(text)
+        ft = getattr(rec, "_last_field_trace", None) if trace_on else None
+        bt = getattr(rec, "_last_body_trace", None) if trace_on else None
+        return rec, name, model, ft, bt
 
     @Slot(str, result=str)
     def startRecognize(self, text: str) -> str:
@@ -253,10 +262,16 @@ class BackendBridge(QObject):
         self._recog_future = None
         source = getattr(fut, "_source_text", "") or ""
         try:
-            rec, name, model = fut.result()
+            rec, name, model, ft, bt = fut.result()
             self.recognizer = rec
             self.session.recognizer_name = name
             self.session.apply_model(model, source_text=source)
+            if self._field_trace_enabled():
+                self.session.field_trace = ft
+                self.session.body_trace = bt
+            else:
+                self.session.field_trace = None
+                self.session.body_trace = None
             payload = self._build_recognize_payload()
         except Exception as exc:  # noqa: BLE001
             self._recog_busy = False

@@ -355,28 +355,45 @@ def _resolve_char_window(
     recipient: str,
     date: str,
     org_signature: str,
-) -> tuple[int, int]:
-    """正文窗口按字符偏移，兼容主送与正文粘在同一行。"""
+) -> tuple[int, int, dict[str, Any]]:
+    """正文窗口按字符偏移，兼容主送与正文粘在同一行。
+
+    返回 (start, end, diag)；diag 供开发者溯源。
+    """
     result = result or {}
     n = len(text or "")
+    diag: dict[str, Any] = {
+        "start_rule": "",
+        "start_label": "",
+        "end_rule": "",
+        "end_label": "",
+        "end_candidates": [],
+    }
     if n == 0:
-        return 0, 0
+        diag["start_rule"] = "empty"
+        diag["start_label"] = "空文本"
+        diag["end_rule"] = "empty"
+        diag["end_label"] = "空文本"
+        return 0, 0, diag
     header_hi = max(80, min(n, int(n * 0.55) + 40))
 
     # ---- start ----
     start: int | None = None
     # 1) 模型偏移：主送 end > 标题 end
-    cand_starts: list[tuple[int, int]] = []
+    cand_starts: list[tuple[int, int, str]] = []
     for sp in _items_to_spans(result, "主送机关"):
         if sp.end <= header_hi:
-            cand_starts.append((0, sp.end))
+            cand_starts.append((0, sp.end, "主送机关"))
     for sp in _items_to_spans(result, "标题"):
         if sp.end <= header_hi:
-            cand_starts.append((1, sp.end))
+            cand_starts.append((1, sp.end, "标题"))
     if cand_starts:
         cand_starts.sort()
         # 模型主送 end 常不含冒号 → 正文会以单独「：」起头
         start = _skip_colon_ws(text, cand_starts[0][1])
+        field_n = cand_starts[0][2]
+        diag["start_rule"] = f"model:{field_n}.end"
+        diag["start_label"] = f"模型偏移：{field_n} 结束处"
 
     # 2) 文首文本锚点
     if start is None:
@@ -388,31 +405,38 @@ def _resolve_char_window(
             if hit is None and core:
                 hit = _find_substr(text, core, lo=0, hi=header_hi)
             if hit is not None:
-                used = recip if text.startswith(recip, hit) else core
                 # 若命中的是带冒号版本
                 if text.startswith(recip, hit):
                     start = _after_field(text, hit, len(recip))
                 else:
                     start = _after_field(text, hit, len(core))
+                diag["start_rule"] = "anchor:主送机关"
+                diag["start_label"] = "文本锚点：主送机关之后"
         if start is None and tit:
             hit = _find_substr(text, tit, lo=0, hi=header_hi)
             if hit is not None:
                 start = _after_field(text, hit, len(tit))
+                diag["start_rule"] = "anchor:标题"
+                diag["start_label"] = "文本锚点：标题之后"
 
     # 3) 启发式：文首「各…：」
     if start is None:
         m = _RECIP_TAIL.search(text[:header_hi])
         if m:
             start = m.end()
+            diag["start_rule"] = "heuristic:recipient_colon"
+            diag["start_label"] = "启发式：文首「各…：」行末"
 
     if start is None:
         start = min(20, max(0, n // 10))
+        diag["start_rule"] = "fallback:head_trim"
+        diag["start_label"] = "弱兜底：裁切文首一段"
 
     start = max(0, min(start, n))
     start = _skip_colon_ws(text, start)
 
     # ---- end：起点之后最早的落款/附件/纪要名单类锚点 ----
-    ends: list[int] = []
+    end_cands: list[tuple[int, str, str]] = []  # (pos, rule, label)
     for key in (
         "附件说明",
         "发文机关署名",
@@ -433,46 +457,46 @@ def _resolve_char_window(
                     continue
                 if not _is_standalone_date_at(text, sp.start, sp.end):
                     continue
-            ends.append(sp.start)
+            end_cands.append((sp.start, f"model:{key}.start", f"模型偏移：{key} 开始处"))
 
-    for rx in (_ATTACH_ANY, _CC_ANY, _NOTE_ANY, _MINUTES_LIST_ANY):
+    for rx, rule, label in (
+        (_ATTACH_ANY, "regex:附件", "正则：附件说明"),
+        (_CC_ANY, "regex:抄送", "正则：抄送"),
+        (_NOTE_ANY, "regex:附注", "正则：附注"),
+        (_MINUTES_LIST_ANY, "regex:纪要名单", "正则：出席/请假/列席"),
+    ):
         m = rx.search(text, start)
         if m:
-            # （?:^|\n）分组时定位到名目字
             pos = m.start(1) if (rx is _MINUTES_LIST_ANY and m.lastindex) else m.start()
             if pos >= start:
-                ends.append(pos)
+                end_cands.append((pos, rule, label))
 
     needle_date = (date or _first_text(result, "成文日期")).strip()
     if needle_date:
-        # 可能多次出现：只收「独立日期行」的命中
         pos = start
         while True:
             hit = _find_substr(text, needle_date, lo=pos, hi=n)
             if hit is None or hit <= start:
                 break
             hit_end = hit + len(needle_date)
-            # 去空白匹配时长度可能对不齐，用 _DATE_ANY 在 hit 处再量一次
             m_at = _DATE_ANY.match(text, hit)
             if m_at:
                 hit_end = m_at.end()
             if _is_standalone_date_at(text, hit, hit_end):
-                ends.append(hit)
+                end_cands.append((hit, "anchor:成文日期", "文本锚点：独立成文日期"))
                 break
             pos = hit + 1
     else:
         m = _DATE_ANY.search(text, start)
-        # 成文日期多在后半；跳过正文里「到2026年底」「11月25日下午」类
         while m:
             if m.start() >= start + max(30, int((n - start) * 0.25)):
                 if _is_standalone_date_at(text, m.start(), m.end()):
-                    ends.append(m.start())
+                    end_cands.append((m.start(), "regex:日期行", "正则：独立日期行"))
                     break
             m = _DATE_ANY.search(text, m.end())
 
     sig = (org_signature or _first_text(result, "发文机关署名")).strip()
     if sig and len(sig) >= 4:
-        # 取 start 之后、偏后部的署名（避免命中红头）
         pos = start
         last = None
         while True:
@@ -482,23 +506,34 @@ def _resolve_char_window(
             last = hit
             pos = hit + 1
         if last is not None and last >= start + max(20, int((n - start) * 0.2)):
-            ends.append(last)
+            end_cands.append((last, "anchor:发文机关署名", "文本锚点：发文机关署名"))
 
     m = _PRINT_ANY.search(text[start:])
     if m:
-        ends.append(start + m.start())
+        end_cands.append((start + m.start(), "regex:印发", "正则：印发行"))
 
-    if ends:
-        end = min(ends)
+    diag["end_candidates"] = [
+        {"pos": p, "rule": r, "label": lb} for p, r, lb in sorted(end_cands, key=lambda x: x[0])[:12]
+    ]
+
+    if end_cands:
+        end, erule, elabel = min(end_cands, key=lambda x: x[0])
+        diag["end_rule"] = erule
+        diag["end_label"] = elabel
     else:
         end = n
+        diag["end_rule"] = "eof"
+        diag["end_label"] = "文末（未找到落款/附件锚点）"
 
     end = max(0, min(end, n))
     if end <= start:
-        # 弱兜底：去掉首尾各一截
         start = min(start, max(0, n // 8))
         end = max(start + 1, n - max(10, n // 10))
-    return start, end
+        diag["start_rule"] = "fallback:window_repair"
+        diag["start_label"] = "弱兜底：窗口修复（end≤start）"
+        diag["end_rule"] = "fallback:window_repair"
+        diag["end_label"] = "弱兜底：窗口修复（end≤start）"
+    return start, end, diag
 
 
 def _merge_soft_wraps(filtered: list[str]) -> list[str]:
@@ -557,6 +592,29 @@ def _split_inline_structures(paras: list[str]) -> list[str]:
     return split_out
 
 
+def extract_body_with_trace(
+    text: str,
+    *,
+    title: str = "",
+    recipient: str = "",
+    date: str = "",
+    org_signature: str = "",
+    org_mark: str = "",
+    sdk_result: dict[str, Any] | None = None,
+) -> tuple[list[str], dict[str, Any]]:
+    """与 extract_body_paragraphs 相同，额外返回裁切诊断。"""
+    paras, diag = _extract_body_impl(
+        text,
+        title=title,
+        recipient=recipient,
+        date=date,
+        org_signature=org_signature,
+        org_mark=org_mark,
+        sdk_result=sdk_result,
+    )
+    return paras, diag
+
+
 def extract_body_paragraphs(
     text: str,
     *,
@@ -572,14 +630,46 @@ def extract_body_paragraphs(
     窗口按字符切，避免「主送与正文同一行」时整段正文被丢到窗外。
     ONNX 只标字段、不标正文；本函数负责裁掉版头/落款。
     """
+    paras, _diag = _extract_body_impl(
+        text,
+        title=title,
+        recipient=recipient,
+        date=date,
+        org_signature=org_signature,
+        org_mark=org_mark,
+        sdk_result=sdk_result,
+    )
+    return paras
+
+
+def _extract_body_impl(
+    text: str,
+    *,
+    title: str = "",
+    recipient: str = "",
+    date: str = "",
+    org_signature: str = "",
+    org_mark: str = "",
+    sdk_result: dict[str, Any] | None = None,
+) -> tuple[list[str], dict[str, Any]]:
     text = text or ""
+    empty_diag = {
+        "start": 0,
+        "end": 0,
+        "start_rule": "empty",
+        "start_label": "空文本",
+        "end_rule": "empty",
+        "end_label": "空文本",
+        "preview": "",
+        "end_candidates": [],
+    }
     if not text.strip():
-        return []
+        return [], empty_diag
 
     sdk_result = sdk_result or {}
     mark = (org_mark or _first_text(sdk_result, "发文机关标志")).strip()
     tit = (title or _first_text(sdk_result, "标题")).strip()
-    c0, c1 = _resolve_char_window(
+    c0, c1, win_diag = _resolve_char_window(
         text,
         result=sdk_result,
         title=tit,
@@ -640,8 +730,24 @@ def extract_body_paragraphs(
     paras = _merge_soft_wraps(filtered)
     split_out = _split_inline_structures(paras)
 
+    preview = chunk.strip().replace("\n", "↵")
+    if len(preview) > 160:
+        preview = preview[:160] + "…"
+    diag = {
+        "start": c0,
+        "end": c1,
+        "start_rule": win_diag.get("start_rule", ""),
+        "start_label": win_diag.get("start_label", ""),
+        "end_rule": win_diag.get("end_rule", ""),
+        "end_label": win_diag.get("end_label", ""),
+        "end_candidates": win_diag.get("end_candidates") or [],
+        "preview": preview,
+        "paragraph_count": 0,
+    }
+
     if split_out:
-        return split_out
+        diag["paragraph_count"] = len(split_out)
+        return split_out, diag
 
     # 最后兜底：字符窗本身（仍滤版头噪声，禁止回退成全文）
     mid = [
@@ -650,5 +756,8 @@ def extract_body_paragraphs(
         if ln.strip() and not _is_header_noise_line(ln.strip(), org_mark=mark, title=tit)
     ]
     if mid:
-        return mid
-    return []
+        diag["paragraph_count"] = len(mid)
+        diag["end_label"] = (diag["end_label"] or "") + " · 段落兜底"
+        return mid, diag
+    diag["paragraph_count"] = 0
+    return [], diag

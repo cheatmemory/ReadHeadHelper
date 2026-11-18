@@ -453,6 +453,101 @@
       display: flex; align-items: center; justify-content: space-between;
       gap: 10px; min-height: 24px;
     }
+    /* 开发者字段溯源：次级元信息，默认极淡，不抢主表单 */
+    .field-trace {
+      display: none;
+      margin: -2px 0 0;
+      padding: 0;
+      border: 0;
+      font-size: 11px;
+      line-height: 1.45;
+      color: #94a3b8;
+      font-variant-numeric: tabular-nums;
+    }
+    body.debug-field-trace .field-trace {
+      display: grid;
+      gap: 2px;
+    }
+    .field-trace .ft-line {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 6px 10px;
+      min-width: 0;
+    }
+    .field-trace .ft-src {
+      color: #64748b;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .field-trace .ft-src[data-src="model"] { color: #475569; }
+    .field-trace .ft-src[data-src="postprocess"] { color: #0f766e; }
+    .field-trace .ft-src[data-src="review"] { color: #b45309; }
+    .field-trace .ft-src[data-src="user"] { color: #7c3aed; }
+    .field-trace .ft-conf { color: #94a3b8; white-space: nowrap; }
+    .field-trace .ft-snip {
+      color: #94a3b8;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+    .body-cut-trace {
+      display: none;
+      margin: 0 0 12px;
+      border: 1px dashed #e2e8f0;
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 0;
+    }
+    body.debug-field-trace .body-cut-trace { display: block; }
+    .body-cut-trace > summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 10px 12px;
+      font-size: 12px;
+      font-weight: 650;
+      color: #64748b;
+      user-select: none;
+    }
+    .body-cut-trace > summary::-webkit-details-marker { display: none; }
+    .body-cut-trace > summary::before {
+      content: "▸ ";
+      color: #94a3b8;
+    }
+    .body-cut-trace[open] > summary::before { content: "▾ "; }
+    .body-cut-trace .bct-body {
+      padding: 0 12px 12px;
+      font-size: 12px;
+      color: #64748b;
+      display: grid;
+      gap: 6px;
+    }
+    .body-cut-trace .bct-row {
+      display: grid;
+      grid-template-columns: 4.5em 1fr;
+      gap: 8px;
+      align-items: start;
+    }
+    .body-cut-trace .bct-k { color: #94a3b8; font-weight: 600; }
+    .body-cut-trace .bct-v {
+      color: #475569;
+      word-break: break-all;
+      font-variant-numeric: tabular-nums;
+    }
+    .body-cut-trace .bct-preview {
+      margin-top: 4px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: #fff;
+      border: 1px solid #eef2f7;
+      color: #64748b;
+      font-size: 11px;
+      line-height: 1.5;
+      max-height: 4.5em;
+      overflow: hidden;
+    }
     .field-head label {
       font-size: 13px; color: var(--ink-soft); font-weight: 600;
       display: inline-flex; align-items: center; gap: 6px; min-width: 0;
@@ -1272,6 +1367,11 @@
               </div>
             </div>
 
+            <details class="body-cut-trace" id="body-cut-trace" hidden>
+              <summary>正文裁切溯源（开发者）</summary>
+              <div class="bct-body" id="body-cut-trace-body"></div>
+            </details>
+
             <div class="struct-toolbar" role="toolbar" aria-label="结构工具">
               <button class="btn" type="button" data-level="h1">一级 一、</button>
               <button class="btn" type="button" data-level="h2">二级 （一）</button>
@@ -1898,6 +1998,144 @@
     btnBack.addEventListener("click", () => setStep(step - 1));
 
     let backend = null;
+    let debugFieldTrace = false;
+    let fieldTraceBaseline = {}; // input id → 识别写入时的值
+    let lastFieldTrace = null;
+    let lastBodyTrace = null;
+
+    const TRACE_INPUT_IDS = [
+      "f-org", "f-docno", "f-issue", "f-title", "f-orgsig", "f-date",
+      "f-print-org", "f-print-date", "f-signers", "f-to", "f-attach",
+      "f-cc", "f-note", "f-secret", "f-urgency", "f-copy",
+      "f-attendance", "f-leave", "f-liexi",
+    ];
+
+    function setDebugFieldTrace(on) {
+      debugFieldTrace = !!on;
+      document.body.classList.toggle("debug-field-trace", debugFieldTrace);
+      const box = document.getElementById("body-cut-trace");
+      if (box) {
+        if (debugFieldTrace) box.removeAttribute("hidden");
+        else box.setAttribute("hidden", "");
+      }
+      if (!debugFieldTrace) {
+        clearFieldTraces();
+        renderBodyCutTrace(null);
+      }
+    }
+
+    function clearFieldTraces() {
+      document.querySelectorAll(".field-trace").forEach((el) => el.remove());
+    }
+
+    function ensureFieldTraceEl(inputId) {
+      const input = document.getElementById(inputId);
+      if (!input) return null;
+      const field = input.closest(".field");
+      if (!field) return null;
+      let el = field.querySelector(":scope > .field-trace");
+      if (!el) {
+        el = document.createElement("div");
+        el.className = "field-trace";
+        el.setAttribute("aria-hidden", "true");
+        // 放在控件下方：field-head 之后、input/textarea 之后
+        field.appendChild(el);
+      }
+      return el;
+    }
+
+    function formatTraceConfidence(c) {
+      if (c === null || c === undefined || c === "") return "-";
+      const n = Number(c);
+      if (!Number.isFinite(n)) return "-";
+      return n.toFixed(3);
+    }
+
+    function renderFieldTraceForInput(inputId, entry, { userEdited = false } = {}) {
+      const el = ensureFieldTraceEl(inputId);
+      if (!el) return;
+      if (userEdited) {
+        el.innerHTML =
+          `<div class="ft-line"><span class="ft-src" data-src="user">用户改过</span>` +
+          `<span class="ft-conf">置信度 -</span></div>`;
+        return;
+      }
+      const spans = (entry && entry.spans) || [];
+      if (!spans.length) {
+        el.innerHTML = "";
+        return;
+      }
+      el.innerHTML = spans
+        .map((sp) => {
+          const src = sp.source || "model";
+          const label = sp.source_label || src;
+          const conf = formatTraceConfidence(sp.confidence);
+          const snip = String(sp.text || "").replace(/</g, "&lt;");
+          const showSnip = spans.length > 1 && snip;
+          return (
+            `<div class="ft-line">` +
+            `<span class="ft-src" data-src="${src}">${label}</span>` +
+            `<span class="ft-conf">置信度 ${conf}</span>` +
+            (showSnip ? `<span class="ft-snip" title="${snip}">${snip}</span>` : "") +
+            `</div>`
+          );
+        })
+        .join("");
+    }
+
+    function applyFieldTraces(trace) {
+      clearFieldTraces();
+      lastFieldTrace = trace || null;
+      if (!debugFieldTrace || !trace || !trace.fields) return;
+      Object.keys(trace.fields).forEach((ui) => {
+        renderFieldTraceForInput(ui, trace.fields[ui], { userEdited: false });
+      });
+    }
+
+    function captureFieldTraceBaseline() {
+      fieldTraceBaseline = {};
+      TRACE_INPUT_IDS.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) fieldTraceBaseline[id] = String(el.value || "");
+      });
+    }
+
+    function markUserEditIfNeeded(inputId) {
+      if (!debugFieldTrace || !lastFieldTrace) return;
+      const el = document.getElementById(inputId);
+      if (!el) return;
+      const now = String(el.value || "");
+      const base = fieldTraceBaseline[inputId];
+      if (base === undefined) return;
+      if (now !== base) {
+        renderFieldTraceForInput(inputId, null, { userEdited: true });
+      } else if (lastFieldTrace.fields && lastFieldTrace.fields[inputId]) {
+        renderFieldTraceForInput(inputId, lastFieldTrace.fields[inputId], { userEdited: false });
+      } else {
+        const slot = ensureFieldTraceEl(inputId);
+        if (slot) slot.innerHTML = "";
+      }
+    }
+
+    function renderBodyCutTrace(diag) {
+      lastBodyTrace = diag || null;
+      const box = document.getElementById("body-cut-trace");
+      const body = document.getElementById("body-cut-trace-body");
+      if (!box || !body) return;
+      if (!debugFieldTrace || !diag || diag.start === undefined) {
+        body.innerHTML = `<div class="bct-row"><span class="bct-k">状态</span><span class="bct-v">暂无裁切信息（先识别文稿）</span></div>`;
+        return;
+      }
+      const start = diag.start;
+      const end = diag.end;
+      body.innerHTML =
+        `<div class="bct-row"><span class="bct-k">窗口</span><span class="bct-v">[${start}, ${end}) · 共 ${Math.max(0, end - start)} 字 · ${diag.paragraph_count || 0} 段</span></div>` +
+        `<div class="bct-row"><span class="bct-k">起点</span><span class="bct-v">${diag.start_label || diag.start_rule || "—"} <span style="color:#94a3b8">(${diag.start_rule || ""})</span></span></div>` +
+        `<div class="bct-row"><span class="bct-k">终点</span><span class="bct-v">${diag.end_label || diag.end_rule || "—"} <span style="color:#94a3b8">(${diag.end_rule || ""})</span></span></div>` +
+        (diag.preview
+          ? `<div class="bct-preview" title="裁切预览">${String(diag.preview).replace(/</g, "&lt;")}</div>`
+          : "");
+    }
 
     function setFieldValue(id, value, preferNoneIfEmpty = true) {
       const input = document.getElementById(id);
@@ -1980,6 +2218,16 @@
         }
       }
       renderBodyTree(data.body_tree || []);
+      if (data.debug_field_trace) {
+        setDebugFieldTrace(true);
+        applyFieldTraces(data.field_trace);
+        renderBodyCutTrace(data.body_trace);
+        captureFieldTraceBaseline();
+      } else if (debugFieldTrace) {
+        // 后端未带溯源时保持开关态，但不刷新错误数据
+        applyFieldTraces(null);
+        renderBodyCutTrace(null);
+      }
       refreshRequiredChecklist();
       if (step >= 2) requestOfficePreview({ force: true });
     }
@@ -2453,10 +2701,11 @@
       requestOfficePreview();
     });
 
-    ["f-org", "f-docno", "f-issue", "f-title", "f-orgsig", "f-date", "f-print-org", "f-print-date", "f-signers", "f-to", "f-attach", "f-cc", "f-note", "f-secret", "f-urgency", "f-copy", "f-attendance", "f-leave", "f-liexi"].forEach((id) => {
+    TRACE_INPUT_IDS.forEach((id) => {
       const el = document.getElementById(id);
       if (!el) return;
       el.addEventListener("input", () => {
+        markUserEditIfNeeded(id);
         refreshRequiredChecklist();
         scheduleOfficePreviewIdle();
       });
@@ -2735,6 +2984,7 @@
               "识别：" + String(info.recognizer || "").toUpperCase();
             const chip = document.getElementById("import-recognizer-chip");
             if (chip) chip.textContent = "识别器：" + String(info.recognizer || "—").toUpperCase();
+            setDebugFieldTrace(!!info.debug_field_trace);
           } catch (_) {
             document.getElementById("app-sub").textContent = "本地离线 · 后端已连接";
           }

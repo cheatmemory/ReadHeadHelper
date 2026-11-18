@@ -3,6 +3,11 @@ app:
   name: 公文排版助手
   offline: true
 
+# 开发者调试：字段溯源（模型 / 正则 / 纠错）与正文裁切诊断
+# 仅改此开关，勿在前端暴露控件
+debug:
+  field_trace: true
+
 model:
   # false 时强制 Mock；true 时优先加载 ONNX，失败则回退 Mock
   enabled: true

@@ -13,6 +13,9 @@ class AppSession:
     ir: LayoutIR = field(default_factory=LayoutIR)
     recognizer_name: str = "mock"
     last_export_path: str = ""
+    # 开发者溯源（debug.field_trace 开启时填充）
+    field_trace: dict | None = None
+    body_trace: dict | None = None
 
     def apply_model(self, model: ModelOutput, source_text: str = ""):
         from core.ir.builder import model_to_partial_ir
