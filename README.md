@@ -43,6 +43,20 @@ py main.py
 SDK 与词表在 `third_party/govdoc-sdk/`（含 `vocab.txt`、接入指南与代码）。  
 **`model.onnx`（约 400MB）不纳入 Git**，需自行放到该目录（与 `vocab.txt` 配套）。见仓库 `.gitignore`。
 
+### 从 GitHub Release 获取模型
+
+1. 打开仓库 [Releases](https://github.com/cheatmemory/ReadHeadHelper/releases)
+2. 在对应 Release 的 **Assets** 中下载 `model.onnx`
+3. 放到本机路径：`third_party/govdoc-sdk/model.onnx`（与仓库里的 `vocab.txt` 同目录）
+4. （建议）校验 MD5，应等于 `48deed668f7191fe79e3fee92e317d02`：
+
+```bash
+cd third_party/govdoc-sdk
+py -c "import hashlib;print(hashlib.md5(open('model.onnx','rb').read()).hexdigest())"
+```
+
+说明：代码走 git；大模型只通过 Release 附件分发。以后若更换模型，请在同一 Release 中同时提供配套的 `model.onnx` 与 `vocab.txt`，二者不可只换其一。
+
 - 配置：`config/default.yaml` → `model.enabled` / `onnx_path` / `vocab_path`
 - `enabled: true` 且 `model.onnx`、`vocab.txt` 可读 → `OnnxFieldRecognizer`（SDK + `postprocess`，非纪要另经 `review`）
 - 否则 `create_recognizer` / 识别接口直接抛错（不再使用假识别器）
