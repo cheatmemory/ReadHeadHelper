@@ -67,11 +67,20 @@ RED_LINE_GLYPH_BELOW_RATIO = 0.28
 # 红线厚度（pt）；过粗时观感不像式样图，取约 0.75pt
 RED_LINE_PT = 0.75
 
-# 7.5 页码：一字线上距版心下边缘 7mm → 页脚距纸底 = 下白边 - 7
+# 7.5 页码：一字线上距版心下边缘 7mm → 名义页脚距纸底 = 下白边 - 7
 PAGE_NUMBER_BELOW_BODY_MM = 7.0
-# 信函页脚：行框底贴 footer_distance 时一字线上沿会上偏；下移页脚使「一字线上沿距版心底」=7mm。
-# 12pt 过头（实测 8.42mm）→ 收为 8pt（再加回 4pt）。
-LETTER_PAGE_NUMBER_FOOTER_NUDGE_PT = 8.0
+# Word/WPS：行框底贴 footer_distance 时一字线上沿会上偏约 2.8mm（实测距版心底 ~4.2mm）。
+# 将 footer_distance 再减 8pt，使一字线上沿距版心底 ≈7mm（通用/纪要/信函同修）。
+# 12pt 过头（实测 8.42mm）→ 收为 8pt。
+PAGE_NUMBER_FOOTER_NUDGE_PT = 8.0
+# 旧名兼容（信函早期单独调参）
+LETTER_PAGE_NUMBER_FOOTER_NUDGE_PT = PAGE_NUMBER_FOOTER_NUDGE_PT
+
+
+def page_number_footer_distance_mm() -> float:
+    """实际写入 section.footer_distance 的毫米值（含一字线上沿校准）。"""
+    nudge_mm = PAGE_NUMBER_FOOTER_NUDGE_PT / 72.0 * MM_PER_INCH
+    return PAGE["bottom_mm"] - PAGE_NUMBER_BELOW_BODY_MM - nudge_mm
 # 一字线（排在页码数字两侧）
 PAGE_NUMBER_DASH = "—"
 

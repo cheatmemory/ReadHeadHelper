@@ -183,7 +183,7 @@ def _fill_page_number_paragraph(paragraph, *, odd: bool, font_name: str) -> None
     pf = paragraph.paragraph_format
     pf.space_before = Pt(0)
     pf.space_after = Pt(0)
-    # 固定行距=字号，减少页脚额外行框把一字线上沿撑离版心底（已知偏大约 9.36mm）
+    # 固定行距=字号，避免页脚额外行框再抬一字线；竖向位置靠 footer_distance 校准
     pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
     pf.line_spacing = Pt(U.PT_4)
     # 空一字 ≈ 4 号汉字宽
@@ -220,8 +220,8 @@ def _setup_page_numbers(doc: Document, *, songti: str = "宋体") -> None:
     """GB/T 9704-2012 §7.5 页码：奇偶页脚 + PAGE 域。"""
     doc.settings.odd_and_even_pages_header_footer = True
     section = doc.sections[0]
-    # 一字线上距版心下边缘 7mm → 页脚距纸底 = 下白边 - 7
-    section.footer_distance = Mm(U.PAGE["bottom_mm"] - U.PAGE_NUMBER_BELOW_BODY_MM)
+    # 名义「下白边−7」再减 8pt，抵消一字线上沿相对 footer_distance 的上偏
+    section.footer_distance = Mm(U.page_number_footer_distance_mm())
 
     odd_footer = section.footer
     odd_footer.is_linked_to_previous = False
@@ -1130,12 +1130,8 @@ class DocxEngine:
         section.different_first_page_header_footer = True
         section.top_margin = Mm(U.PAGE["top_mm"])
         section.bottom_margin = Mm(U.PAGE["bottom_mm"])
-        # 下移页脚：抵消一字线上沿相对 footer_distance 的上偏（见 units 注释）
-        section.footer_distance = Mm(
-            U.PAGE["bottom_mm"]
-            - U.PAGE_NUMBER_BELOW_BODY_MM
-            - _pt_to_mm(U.LETTER_PAGE_NUMBER_FOOTER_NUDGE_PT)
-        )
+        # 与通用文同公式：下移页脚，使一字线上沿距版心底 ≈7mm
+        section.footer_distance = Mm(U.page_number_footer_distance_mm())
         # 页眉只挂底双线（纸面绝对定位）；header_distance 是距纸顶，须远小于 top_margin，
         # 切勿写成「距页底 20mm」，否则易与版心抢高、页码上移。
         section.header_distance = Mm(12.0)

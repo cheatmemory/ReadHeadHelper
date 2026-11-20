@@ -218,7 +218,7 @@ def test_page_numbers_gbt_7_5(tmp_path):
 
     doc = Document(out)
     sec = doc.sections[0]
-    expect_footer = U.mm_to_emu(U.PAGE["bottom_mm"] - U.PAGE_NUMBER_BELOW_BODY_MM)
+    expect_footer = U.mm_to_emu(U.page_number_footer_distance_mm())
     assert abs(int(sec.footer_distance) - expect_footer) <= 400
     assert doc.settings.odd_and_even_pages_header_footer is True
 
