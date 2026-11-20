@@ -37,6 +37,21 @@ PAGE = {
 RED_HEADER_FROM_BODY_TOP_MM = 35.0
 # 命令（令）标志墨迹顶距版心上边缘 20mm → 距纸顶 57mm（docs/baselines/命令.md §3.1）
 ORDER_MARK_FROM_BODY_TOP_MM = 20.0
+# 信函标志墨迹顶距纸顶 30mm（docs/baselines/信函.md §5）
+LETTER_MARK_FROM_PAPER_TOP_MM = 30.0
+# 信函标志底 → 第一条双线 4mm；第二条双线距下页边 20mm
+LETTER_DOUBLE_LINE_AFTER_MARK_MM = 4.0
+LETTER_BOTTOM_DOUBLE_LINE_FROM_PAGE_BOTTOM_MM = 20.0
+# 信函双线长 170mm（左右各溢出版心 7mm）；粗/细/净间隔【收敛】
+LETTER_DOUBLE_LINE_WIDTH_MM = 170.0
+LETTER_DOUBLE_LINE_THICK_PT = 1.5
+LETTER_DOUBLE_LINE_THIN_PT = 0.75
+LETTER_DOUBLE_LINE_GAP_MM = 1.0
+# 份号/字号 / 线上一行文字 → 双线：3 号汉字高 7/8 = 14pt
+LETTER_GAP_TO_DOUBLE_LINE_PT = 14.0
+# 版头浮动表行高=网格、段内=字号时，流式锚点仍按行框占位，标题前「空二行」
+# 会多出约 (行高-字号)×该系数；从第二空行扣掉，使特急→标题回到 2×网格行距。
+LETTER_META_TITLE_GAP_NUDGE_RATIO = 0.8
 # 签名章占位：扁长方 45×20 mm（高须 ≤ 空二行 ≈ 20.5 mm）
 ORDER_SEAL_WIDTH_MM = 45.0
 ORDER_SEAL_HEIGHT_MM = 20.0
@@ -54,6 +69,9 @@ RED_LINE_PT = 0.75
 
 # 7.5 页码：一字线上距版心下边缘 7mm → 页脚距纸底 = 下白边 - 7
 PAGE_NUMBER_BELOW_BODY_MM = 7.0
+# 信函页脚：行框底贴 footer_distance 时一字线上沿会上偏；下移页脚使「一字线上沿距版心底」=7mm。
+# 12pt 过头（实测 8.42mm）→ 收为 8pt（再加回 4pt）。
+LETTER_PAGE_NUMBER_FOOTER_NUDGE_PT = 8.0
 # 一字线（排在页码数字两侧）
 PAGE_NUMBER_DASH = "—"
 

@@ -10,12 +10,15 @@ from typing import Any
 class SealMode(str, Enum):
     STAMP = "stamp_layout"
     NO_STAMP = "no_stamp_layout"
+    # 信函：按有章位置排、不生成印章（docs/baselines/信函.md §17.2）
+    RESERVED = "reserved"
 
 
 class DocKind(str, Enum):
     GENERAL = "general"
     MINUTES = "minutes"
     ORDER = "order"
+    LETTER = "letter"
 
 
 @dataclass
@@ -193,6 +196,9 @@ class LayoutIR:
     def is_order(self) -> bool:
         return self.doc_kind == DocKind.ORDER
 
+    def is_letter(self) -> bool:
+        return self.doc_kind == DocKind.LETTER
+
     def missing_required(self) -> list[str]:
         if self.is_minutes():
             missing: list[str] = []
@@ -227,6 +233,11 @@ class LayoutIR:
             if pd and not po:
                 missing.append("印发机关")
             return missing
+
+        if self.is_letter():
+            from core.ir.letter import letter_validation_errors
+
+            return letter_validation_errors(self)
 
         missing = []
         if not (self.org_marks or [""])[0].strip():

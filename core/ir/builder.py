@@ -6,6 +6,7 @@ import re
 from typing import Iterable
 
 from core.body_structure.parser import parse_body_blocks
+from core.ir.letter import apply_letter_to_ir, looks_like_letter
 from core.ir.minutes import apply_minutes_to_ir
 from core.ir.order import apply_order_to_ir, looks_like_order
 from core.ir.schema import DocKind, LayoutIR, ModelOutput, SealMode
@@ -89,6 +90,13 @@ def model_to_partial_ir(model: ModelOutput, source_text: str = "") -> LayoutIR:
         model, "_is_order", False
     ):
         return apply_order_to_ir(ir, source_text=source_text, model=model)
+    # 信函：字号函代字 / 标题以函结尾 / 正则已挂 _is_letter（优先于纪要）
+    if getattr(model, "_is_letter", False) or looks_like_letter(
+        doc_number=ir.doc_number,
+        title=ir.title,
+        source_text=source_text,
+    ):
+        return apply_letter_to_ir(ir, source_text=source_text, model=model)
     return apply_minutes_to_ir(ir, source_text=source_text, model=model)
 
 
@@ -108,9 +116,13 @@ def build_layout_ir(
     ir = model_to_partial_ir(model, source_text=source_text)
     if isinstance(seal_mode, str):
         seal_mode = SealMode(seal_mode) if seal_mode else None
-    # 纪要/命令不校验、不写入 seal_mode
+    # 纪要/命令不校验 seal_mode；信函锁 reserved
     if ir.is_minutes() or ir.is_order():
         ir.seal_mode = None
+    elif ir.is_letter():
+        from core.ir.letter import apply_letter_layout_locks
+
+        apply_letter_layout_locks(ir)
     else:
         ir.seal_mode = seal_mode
     ir.cc_recipients = (cc_recipients or "").strip()
@@ -131,4 +143,8 @@ def build_layout_ir(
                 ir.doc_kind = DocKind(v) if not isinstance(v, DocKind) else v
                 if ir.is_minutes() or ir.is_order():
                     ir.seal_mode = None
+                elif ir.is_letter():
+                    from core.ir.letter import apply_letter_layout_locks
+
+                    apply_letter_layout_locks(ir)
     return ir

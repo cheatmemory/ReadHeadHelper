@@ -18,6 +18,13 @@ from app.session import AppSession
 from core.body_structure.parser import renumber_blocks
 from core.config_loader import load_config, project_root
 from core.ir.builder import split_names
+from core.ir.letter import (
+    apply_letter_layout_locks,
+    letter_export_basename,
+    normalize_urgency,
+    strip_cc_prefix,
+    strip_recipient_colon,
+)
 from core.ir.minutes import format_issue_no, normalize_name_list
 from core.ir.order import format_order_no, normalize_order_signers
 from core.ir.schema import AttachmentDocx, BodyBlock, DocKind, LayoutIR, ModelOutput, SealMode
@@ -308,6 +315,8 @@ class BackendBridge(QObject):
                 from core.ir.order import order_export_basename
 
                 default_name = order_export_basename(ir)
+            elif ir.is_letter():
+                default_name = letter_export_basename(ir)
             else:
                 default_name = (ir.doc_number or "导出公文").replace("/", "-") + ".docx"
             out_dir = project_root() / "examples" / "out"
@@ -349,6 +358,8 @@ class BackendBridge(QObject):
             ir.doc_kind = DocKind.GENERAL
         if ir.is_minutes() or ir.is_order():
             ir.seal_mode = None
+        elif ir.is_letter():
+            apply_letter_layout_locks(ir)
         else:
             ir.seal_mode = SealMode(seal) if seal else None
         ir.body_tree = body
@@ -448,11 +459,14 @@ class BackendBridge(QObject):
         ir.copy_number = str(fields.get("copy_number") or "").strip()
         ir.urgency = str(fields.get("urgency") or "").strip()
         org_raw = str(fields.get("org_mark") or "").strip()
-        # 纪要/命令标志通常整串，勿按顿号拆成多标志
-        if ir.is_minutes() or ir.is_order():
+        # 纪要/命令/信函标志通常整串，勿按顿号拆成多标志（信函联合只用主办）
+        if ir.is_minutes() or ir.is_order() or ir.is_letter():
             ir.org_marks = [org_raw] if org_raw else []
         else:
             ir.org_marks = split_names(org_raw)
+        if ir.is_letter() and len(ir.org_marks) > 1:
+            # 联合只用主办；「文件」后缀留给校验提示，不在此默默剥掉
+            ir.org_marks = [ir.org_marks[0]]
         if ir.is_order():
             # 命令：issuer_sign / signer_titles 均为职务
             titles_raw = fields.get("signer_titles")
@@ -467,17 +481,22 @@ class BackendBridge(QObject):
             ir.title = ""
             ir.org_signature = ""
         else:
-            ir.signers = split_names(str(fields.get("issuer_sign") or ""))
+            ir.signers = [] if ir.is_letter() else split_names(str(fields.get("issuer_sign") or ""))
             ir.doc_number = str(fields.get("doc_number") or "").strip()
             ir.order_no = ""
             ir.title = str(fields.get("title") or "").strip()
             ir.org_signature = str(fields.get("org_signature") or "").strip()
         ir.issue_no = format_issue_no(str(fields.get("issue_no") or ""))
         ir.recipient = str(fields.get("recipient") or "").strip()
+        if ir.is_letter():
+            ir.recipient = strip_recipient_colon(ir.recipient)
+            ir.urgency = normalize_urgency(ir.urgency)
         ir.attachment_caption = str(fields.get("attachment_caption") or "").strip()
         ir.date = str(fields.get("date") or "").strip()
         ir.note = str(fields.get("note") or "").strip()
         ir.cc_recipients = str(fields.get("cc_recipients") or "").strip()
+        if ir.is_letter():
+            ir.cc_recipients = strip_cc_prefix(ir.cc_recipients)
         ir.print_org = str(fields.get("print_org") or "").strip()
         ir.print_date = str(fields.get("print_date") or "").strip()
         ir.attendance = normalize_name_list(str(fields.get("attendance") or ""))
@@ -491,11 +510,15 @@ class BackendBridge(QObject):
         ir.recipients_in_footer = bool(fields.get("recipients_in_footer"))
         if (ir.is_minutes() or ir.is_order()) and ir.recipient.strip():
             ir.recipients_in_footer = True
+        if ir.is_letter():
+            ir.recipients_in_footer = False
         ir.absent_flags = dict(data.get("absent_flags") or {})
 
         seal = data.get("seal_mode")
         if ir.is_minutes() or ir.is_order():
             ir.seal_mode = None
+        elif ir.is_letter():
+            apply_letter_layout_locks(ir)
         else:
             ir.seal_mode = SealMode(seal) if seal else None
 

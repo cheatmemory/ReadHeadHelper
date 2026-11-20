@@ -75,7 +75,7 @@ class ConfirmPage(QWidget):
         main = QGroupBox("主体")
         mg = QGridLayout(main)
         self._add_required(mg, 0, 0, 2, "title", "标题 *", multiline=True)
-        self._add_optional(mg, 1, 0, "recipient", "主送机关", "", span=2)
+        self._recipient_box = self._add_optional(mg, 1, 0, "recipient", "主送机关", "", span=2)
         self._add_optional(mg, 2, 0, "attachment_caption", "附件说明", "", span=2)
         root.addWidget(main)
 
@@ -85,8 +85,8 @@ class ConfirmPage(QWidget):
         self._add_required(fg, 0, 1, 1, "date", "成文日期 *")
         self._add_optional(fg, 1, 0, "note", "附注", "（此件公开发布）")
         self._add_optional(fg, 1, 1, "cc_recipients", "抄送", "需人工或模型填写")
-        self._add_required(fg, 2, 0, 1, "print_org", "印发机关 *")
-        self._add_required(fg, 2, 1, 1, "print_date", "印发日期 *")
+        self._print_org_box = self._add_required(fg, 2, 0, 1, "print_org", "印发机关 *")
+        self._print_date_box = self._add_required(fg, 2, 1, 1, "print_date", "印发日期 *")
         root.addWidget(foot)
         root.addStretch(1)
 
@@ -122,6 +122,7 @@ class ConfirmPage(QWidget):
         if isinstance(edit, QLineEdit):
             edit.setPlaceholderText(placeholder)
         grid.addWidget(box, r, c, 1, span)
+        return box
 
     def _add_required(self, grid: QGridLayout, r: int, c: int, span: int, key: str, label: str, multiline: bool = False):
         box, edit = self._wrap_field(key, label, False)
@@ -153,11 +154,40 @@ class ConfirmPage(QWidget):
         ir = self.session.ir
         minutes = ir.is_minutes()
         order = ir.is_order()
+        letter = ir.is_letter()
         # 纪要/命令无发文字号 / 发文机关署名
         if hasattr(self, "_doc_number_box"):
             self._doc_number_box.setVisible(not minutes and not order)
         if hasattr(self, "_org_signature_box"):
             self._org_signature_box.setVisible(not minutes and not order)
+        # 信函无印发；主送必填（隐藏「无此项」）
+        if hasattr(self, "_print_org_box"):
+            self._print_org_box.setVisible(not letter)
+        if hasattr(self, "_print_date_box"):
+            self._print_date_box.setVisible(not letter)
+        recip_none = self.none_btns.get("recipient")
+        if recip_none is not None:
+            recip_none.setVisible(not letter)
+            if letter and recip_none.isChecked():
+                recip_none.setChecked(False)
+                self._toggle_none("recipient", False)
+        recip_edit = self.fields.get("recipient")
+        if recip_edit is not None and letter:
+            box = recip_edit.parent()
+            if box is not None:
+                for lab in box.findChildren(QLabel):
+                    t = lab.text() or ""
+                    if "主送" in t:
+                        lab.setText("主送机关 *")
+                        break
+        elif recip_edit is not None:
+            box = recip_edit.parent()
+            if box is not None:
+                for lab in box.findChildren(QLabel):
+                    t = lab.text() or ""
+                    if "主送" in t:
+                        lab.setText("主送机关  选填")
+                        break
         org_label = "纪要标志 *" if minutes else "发文机关标志 *"
         # 更新机关标志旁标签文案
         org_edit = self.fields.get("org_mark")
@@ -182,8 +212,8 @@ class ConfirmPage(QWidget):
             "date": ir.date,
             "note": ir.note,
             "cc_recipients": ir.cc_recipients,
-            "print_org": ir.print_org,
-            "print_date": ir.print_date,
+            "print_org": "" if letter else ir.print_org,
+            "print_date": "" if letter else ir.print_date,
         }
         for k, v in mapping.items():
             w = self.fields.get(k)
@@ -193,11 +223,22 @@ class ConfirmPage(QWidget):
                 w.setPlainText(v)
             else:
                 w.setText(v)
-            if k in self.none_btns and not v.strip():
+            # 信函主送必填：空也不自动勾「无此项」
+            if k in self.none_btns and not v.strip() and not (letter and k == "recipient"):
                 self.none_btns[k].setChecked(True)
                 self._toggle_none(k, True)
         if minutes or order:
             ir.seal_mode = None
+            self.alert.hide()
+            for btn in self.seal_btns.values():
+                btn.setChecked(False)
+                btn.setProperty("selected", "false")
+                btn.style().unpolish(btn)
+                btn.style().polish(btn)
+        elif letter:
+            from core.ir.letter import apply_letter_layout_locks
+
+            apply_letter_layout_locks(ir)
             self.alert.hide()
             for btn in self.seal_btns.values():
                 btn.setChecked(False)
@@ -216,6 +257,7 @@ class ConfirmPage(QWidget):
         get = self._val
         minutes = ir.is_minutes()
         order = ir.is_order()
+        letter = ir.is_letter()
         secret = get("secret_combo")
         if "★" in secret:
             a, b = secret.split("★", 1)
@@ -224,8 +266,10 @@ class ConfirmPage(QWidget):
             ir.secret_level, ir.secret_period = secret, ""
         ir.copy_number = "" if order else get("copy_number")
         ir.urgency = "" if order else get("urgency")
-        ir.signers = split_names(get("issuer_sign"))
+        ir.signers = [] if letter else split_names(get("issuer_sign"))
         ir.org_marks = split_names(get("org_mark"))
+        if letter and len(ir.org_marks) > 1:
+            ir.org_marks = [ir.org_marks[0]]
         ir.doc_number = "" if (minutes or order) else get("doc_number")
         ir.title = "" if order else get("title")
         ir.recipient = get("recipient")
@@ -239,11 +283,27 @@ class ConfirmPage(QWidget):
             # Qt 页暂无独立令号框时，从字号槽兼容
             if not ir.order_no.strip():
                 ir.order_no = format_order_no(get("doc_number"))
+        if letter:
+            from core.ir.letter import (
+                apply_letter_layout_locks,
+                normalize_urgency,
+                strip_cc_prefix,
+                strip_recipient_colon,
+            )
+
+            apply_letter_layout_locks(ir)
+            ir.recipient = strip_recipient_colon(ir.recipient)
+            ir.cc_recipients = strip_cc_prefix(get("cc_recipients"))
+            ir.urgency = normalize_urgency(ir.urgency)
+            ir.recipients_in_footer = False
+            ir.print_org = ""
+            ir.print_date = ""
         ir.date = get("date")
         ir.note = get("note")
-        ir.cc_recipients = get("cc_recipients")
-        ir.print_org = get("print_org")
-        ir.print_date = get("print_date")
+        if not letter:
+            ir.cc_recipients = get("cc_recipients")
+            ir.print_org = get("print_org")
+            ir.print_date = get("print_date")
         for k, btn in self.none_btns.items():
             ir.absent_flags[k] = btn.isChecked()
         return ir.missing_required()
@@ -257,4 +317,9 @@ class ConfirmPage(QWidget):
         return w.text().strip()
 
     def seal_ok(self) -> bool:
-        return self.session.ir.seal_mode is not None
+        ir = self.session.ir
+        if ir.is_letter():
+            return True
+        if ir.is_minutes() or ir.is_order():
+            return True
+        return ir.seal_mode is not None

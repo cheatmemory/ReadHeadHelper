@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from core.body_structure.extract import extract_body_paragraphs, extract_body_with_trace
+from core.ir.letter import looks_like_letter
 from core.ir.minutes import format_issue_no, looks_like_minutes, normalize_name_list
 from core.ir.order import looks_like_order
 from core.ir.schema import ModelOutput
@@ -120,6 +121,16 @@ class OnnxFieldRecognizer:
             from core.recognize.order_regex import recognize_order
 
             model = recognize_order(text)
+            self._last_sdk_result = None
+            self._last_field_trace = None
+            self._last_body_trace = None
+            return model
+
+        # 信函：ONNX 尚不可靠 → 走正则（判定见 baseline §1；勿与命令/纪要误抢）
+        if looks_like_letter(source_text=text):
+            from core.recognize.letter_regex import recognize_letter
+
+            model = recognize_letter(text)
             self._last_sdk_result = None
             self._last_field_trace = None
             self._last_body_trace = None

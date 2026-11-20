@@ -72,6 +72,10 @@ class ExportPage(QWidget):
             from core.ir.order import order_export_basename
 
             return str(out_dir / order_export_basename(ir))
+        if ir.is_letter():
+            from core.ir.letter import letter_export_basename
+
+            return str(out_dir / letter_export_basename(ir))
         name = (ir.doc_number or "导出公文").replace("/", "-") + ".docx"
         return str(out_dir / name)
 
@@ -91,7 +95,7 @@ class ExportPage(QWidget):
         if missing:
             QMessageBox.warning(self, "无法导出", "缺少：" + "、".join(missing))
             return False
-        if (ir.is_minutes() or ir.is_order()) and Path(self.out_path).name in {
+        if (ir.is_minutes() or ir.is_order() or ir.is_letter()) and Path(self.out_path).name in {
             "导出公文.docx",
             "导出公文",
         }:

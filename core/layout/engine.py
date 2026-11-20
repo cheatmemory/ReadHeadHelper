@@ -183,6 +183,9 @@ def _fill_page_number_paragraph(paragraph, *, odd: bool, font_name: str) -> None
     pf = paragraph.paragraph_format
     pf.space_before = Pt(0)
     pf.space_after = Pt(0)
+    # 固定行距=字号，减少页脚额外行框把一字线上沿撑离版心底（已知偏大约 9.36mm）
+    pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+    pf.line_spacing = Pt(U.PT_4)
     # 空一字 ≈ 4 号汉字宽
     one_char = Pt(U.PT_4)
     if odd:
@@ -388,7 +391,7 @@ def _signature_right_indents(
     sig_w = layout_text_width_pt(org_signature, font_face, size_pt)
     date_w = layout_text_width_pt(date, font_face, size_pt)
 
-    if seal_mode == SealMode.STAMP:
+    if seal_mode in (SealMode.STAMP, SealMode.RESERVED):
         # 日期右空四字；署名前一行、以日期为准居中（右端不必齐）
         date_right = 4.0 * one
         sig_right = date_right + (date_w - sig_w) / 2.0
@@ -549,6 +552,8 @@ class DocxEngine:
             return self._render_minutes(ir, out_path)
         if ir.is_order():
             return self._render_order(ir, out_path)
+        if ir.is_letter():
+            return self._render_letter(ir, out_path)
 
         if ir.seal_mode is None:
             raise ValueError("seal_mode 未设置，拒绝导出")
@@ -1081,6 +1086,767 @@ class DocxEngine:
         _disable_snap_to_grid(sp)
         _set_run_font(sp.add_run(""), name=self.fonts["fangsong"], size_pt=0.5)
 
+    # ── 信函（docs/baselines/信函.md）─────────────────────────────────
+
+    def _render_letter(self, ir: LayoutIR, out_path: str | Path) -> Path:
+        from core.ir.letter import apply_letter_layout_locks
+        from core.ir.schema import SealMode as _SM
+
+        apply_letter_layout_locks(ir)
+        if ir.seal_mode != _SM.RESERVED:
+            ir.seal_mode = _SM.RESERVED
+        missing = ir.missing_required()
+        if missing:
+            raise ValueError("必填缺失：" + "、".join(missing))
+
+        doc = Document()
+        _set_page_and_grid(doc)
+        self._setup_letter_page_chrome(doc)
+        if doc.paragraphs:
+            doc.paragraphs[0].clear()
+
+        self._write_letter_banner(doc, ir)
+        self._write_letter_body(doc, ir)
+        self._write_letter_signature(doc, ir)
+        self._write_note(doc, ir)
+        self._write_attachment_pages(doc, ir)
+        self._write_letter_banji(doc, ir)
+
+        out_path = Path(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(out_path))
+        return out_path
+
+    def _setup_letter_page_chrome(self, doc: Document) -> None:
+        """首页无页码；第 2 页起 §7.5；底双线挂页眉绝对定位（距页底 20mm）。
+
+        标志/第一条双线改在正文锚定（见 _write_letter_banner）——挂页眉会被 Word
+        撑高页眉区，再叠加正文垫高，字号距双线会被拉到 ~80pt。
+        页脚只保留页码一段。
+        """
+        songti = self.fonts["songti"]
+        doc.settings.odd_and_even_pages_header_footer = True
+        section = doc.sections[0]
+        section.different_first_page_header_footer = True
+        section.top_margin = Mm(U.PAGE["top_mm"])
+        section.bottom_margin = Mm(U.PAGE["bottom_mm"])
+        # 下移页脚：抵消一字线上沿相对 footer_distance 的上偏（见 units 注释）
+        section.footer_distance = Mm(
+            U.PAGE["bottom_mm"]
+            - U.PAGE_NUMBER_BELOW_BODY_MM
+            - _pt_to_mm(U.LETTER_PAGE_NUMBER_FOOTER_NUDGE_PT)
+        )
+        # 页眉只挂底双线（纸面绝对定位）；header_distance 是距纸顶，须远小于 top_margin，
+        # 切勿写成「距页底 20mm」，否则易与版心抢高、页码上移。
+        section.header_distance = Mm(12.0)
+
+        def _clear_story(part) -> None:
+            part.is_linked_to_previous = False
+            while part.paragraphs:
+                p = part.paragraphs[0]
+                p._element.getparent().remove(p._element)
+                if not part.paragraphs:
+                    break
+            for tbl in list(part.tables):
+                tbl._tbl.getparent().remove(tbl._tbl)
+
+        # tblpY = 双线上沿；表高 ≈ 净间隔 → 下沿距页底 = 20mm
+        y_bottom = (
+            U.PAGE["height_mm"]
+            - U.LETTER_BOTTOM_DOUBLE_LINE_FROM_PAGE_BOTTOM_MM
+            - U.LETTER_DOUBLE_LINE_GAP_MM
+        )
+        for header in (
+            section.first_page_header,
+            section.header,
+            section.even_page_header,
+        ):
+            _clear_story(header)
+            sp = header.add_paragraph()
+            _set_paragraph_spacing(sp, before_pt=0, after_pt=0, line_pt=0.1)
+            _disable_snap_to_grid(sp)
+            _set_run_font(sp.add_run(""), name=self.fonts["fangsong"], size_pt=0.5)
+            self._add_letter_abs_double_line(
+                header, thick_on_top=False, y_from_page_top_mm=y_bottom
+            )
+
+        _clear_story(section.first_page_footer)
+        for footer, odd in (
+            (section.footer, True),
+            (section.even_page_footer, False),
+        ):
+            _clear_story(footer)
+            p = footer.add_paragraph()
+            _fill_page_number_paragraph(p, odd=odd, font_name=songti)
+
+    def _letter_double_line_x_twips(self) -> int:
+        """双线左缘：版心左缘再左移 7mm（相对版心居中，而非纸面居中）。"""
+        overflow_mm = (U.LETTER_DOUBLE_LINE_WIDTH_MM - U.PAGE["body_width_mm"]) / 2.0
+        return U.mm_to_twips(U.PAGE["left_mm"] - overflow_mm)
+
+    def _add_letter_abs_double_line(
+        self, container, *, thick_on_top: bool, y_from_page_top_mm: float
+    ) -> None:
+        """纸面绝对定位红色双线：长 170mm、相对版心居中；单表顶/底边框 + 净间隔行高。"""
+        from docx.shared import Twips as _Twips
+
+        line_w = U.mm_to_twips(U.LETTER_DOUBLE_LINE_WIDTH_MM)
+        x_twips = self._letter_double_line_x_twips()
+        y_twips = U.mm_to_twips(y_from_page_top_mm)
+        thick_sz = max(2, int(round(U.LETTER_DOUBLE_LINE_THICK_PT * 8)))
+        thin_sz = max(2, int(round(U.LETTER_DOUBLE_LINE_THIN_PT * 8)))
+        gap_twips = max(20, U.mm_to_twips(U.LETTER_DOUBLE_LINE_GAP_MM))
+        top_sz = thick_sz if thick_on_top else thin_sz
+        bot_sz = thin_sz if thick_on_top else thick_sz
+
+        try:
+            table = container.add_table(1, 1, width=_Twips(line_w))
+        except TypeError:
+            table = container.add_table(rows=1, cols=1)
+        table.autofit = False
+        tbl = table._tbl
+        tblPr = tbl.tblPr
+        if tblPr is None:
+            tblPr = OxmlElement("w:tblPr")
+            tbl.insert(0, tblPr)
+        for tag in (
+            "tblW",
+            "tblBorders",
+            "tblCellMar",
+            "tblLayout",
+            "tblInd",
+            "jc",
+            "tblpPr",
+            "tblOverlap",
+        ):
+            for old in tblPr.findall(qn(f"w:{tag}")):
+                tblPr.remove(old)
+
+        tblW = OxmlElement("w:tblW")
+        tblW.set(qn("w:w"), str(line_w))
+        tblW.set(qn("w:type"), "dxa")
+        tblPr.append(tblW)
+
+        tblpPr = OxmlElement("w:tblpPr")
+        for k, v in (
+            ("w:leftFromText", "0"),
+            ("w:rightFromText", "0"),
+            ("w:topFromText", "0"),
+            ("w:bottomFromText", "0"),
+            ("w:vertAnchor", "page"),
+            ("w:horzAnchor", "page"),
+            ("w:tblpX", str(int(x_twips))),
+            ("w:tblpY", str(int(y_twips))),
+        ):
+            tblpPr.set(qn(k), v)
+        tblPr.append(tblpPr)
+        overlap = OxmlElement("w:tblOverlap")
+        overlap.set(qn("w:val"), "never")
+        tblPr.append(overlap)
+        layout = OxmlElement("w:tblLayout")
+        layout.set(qn("w:type"), "fixed")
+        tblPr.append(layout)
+
+        borders = OxmlElement("w:tblBorders")
+        for edge, val, sz, color in (
+            ("top", "single", top_sz, "FF0000"),
+            ("left", "nil", 0, "auto"),
+            ("bottom", "single", bot_sz, "FF0000"),
+            ("right", "nil", 0, "auto"),
+            ("insideH", "nil", 0, "auto"),
+            ("insideV", "nil", 0, "auto"),
+        ):
+            el = OxmlElement(f"w:{edge}")
+            el.set(qn("w:val"), val)
+            el.set(qn("w:sz"), str(sz))
+            el.set(qn("w:space"), "0")
+            el.set(qn("w:color"), color)
+            borders.append(el)
+        tblPr.append(borders)
+
+        cellMar = OxmlElement("w:tblCellMar")
+        for side in ("top", "left", "bottom", "right"):
+            m = OxmlElement(f"w:{side}")
+            m.set(qn("w:w"), "0")
+            m.set(qn("w:type"), "dxa")
+            cellMar.append(m)
+        tblPr.append(cellMar)
+
+        # 固定布局以 gridCol/tcW 为准；python-docx 默认 gridCol≈版心宽，必须改成 170mm
+        for old in tbl.findall(qn("w:tblGrid")):
+            tbl.remove(old)
+        grid = OxmlElement("w:tblGrid")
+        gc = OxmlElement("w:gridCol")
+        gc.set(qn("w:w"), str(line_w))
+        grid.append(gc)
+        tblPr.addnext(grid)
+
+        cell = table.rows[0].cells[0]
+        tcPr = cell._tc.get_or_add_tcPr()
+        for old in tcPr.findall(qn("w:tcW")):
+            tcPr.remove(old)
+        tcW = OxmlElement("w:tcW")
+        tcW.set(qn("w:w"), str(line_w))
+        tcW.set(qn("w:type"), "dxa")
+        tcPr.append(tcW)
+        tr = table.rows[0]._tr
+        trPr = tr.get_or_add_trPr()
+        for old in trPr.findall(qn("w:trHeight")):
+            trPr.remove(old)
+        trHeight = OxmlElement("w:trHeight")
+        trHeight.set(qn("w:val"), str(int(gap_twips)))
+        trHeight.set(qn("w:hRule"), "exact")
+        trPr.append(trHeight)
+        cell.text = ""
+        cp = cell.paragraphs[0]
+        _set_paragraph_spacing(cp, before_pt=0, after_pt=0, line_pt=0.5)
+        _disable_snap_to_grid(cp)
+
+    def _add_letter_abs_mark(
+        self,
+        container,
+        *,
+        text: str,
+        font_face: str,
+        font_pt: float,
+        allow_wrap: bool,
+        y_line_top_mm: float,
+    ) -> None:
+        """正文锚定：发文机关标志纸面绝对定位（墨迹顶≈纸顶 30mm）。"""
+        from docx.shared import Twips as _Twips
+
+        body_w = U.mm_to_twips(U.PAGE["body_width_mm"])
+        x_twips = U.mm_to_twips(U.PAGE["left_mm"])
+        y_twips = U.mm_to_twips(y_line_top_mm)
+        line_pt = _mark_line_pt(font_pt, self.line_pt)
+        row_twips = max(200, int(round(line_pt * 20)))
+
+        try:
+            table = container.add_table(rows=1, cols=1)
+        except TypeError:
+            table = container.add_table(1, 1, width=_Twips(body_w))
+        table.autofit = False
+        tbl = table._tbl
+        tblPr = tbl.tblPr
+        if tblPr is None:
+            tblPr = OxmlElement("w:tblPr")
+            tbl.insert(0, tblPr)
+        for tag in (
+            "tblW",
+            "tblBorders",
+            "tblCellMar",
+            "tblLayout",
+            "tblInd",
+            "jc",
+            "tblpPr",
+            "tblOverlap",
+        ):
+            for old in tblPr.findall(qn(f"w:{tag}")):
+                tblPr.remove(old)
+
+        tblW = OxmlElement("w:tblW")
+        tblW.set(qn("w:w"), str(body_w))
+        tblW.set(qn("w:type"), "dxa")
+        tblPr.append(tblW)
+        tblpPr = OxmlElement("w:tblpPr")
+        for k, v in (
+            ("w:leftFromText", "0"),
+            ("w:rightFromText", "0"),
+            ("w:topFromText", "0"),
+            ("w:bottomFromText", "0"),
+            ("w:vertAnchor", "page"),
+            ("w:horzAnchor", "page"),
+            ("w:tblpX", str(int(x_twips))),
+            ("w:tblpY", str(int(y_twips))),
+        ):
+            tblpPr.set(qn(k), v)
+        tblPr.append(tblpPr)
+        overlap = OxmlElement("w:tblOverlap")
+        overlap.set(qn("w:val"), "never")
+        tblPr.append(overlap)
+        layout = OxmlElement("w:tblLayout")
+        layout.set(qn("w:type"), "fixed")
+        tblPr.append(layout)
+        _clear_tbl_borders(tblPr)
+        cellMar = OxmlElement("w:tblCellMar")
+        for side in ("top", "left", "bottom", "right"):
+            m = OxmlElement(f"w:{side}")
+            m.set(qn("w:w"), "0")
+            m.set(qn("w:type"), "dxa")
+            cellMar.append(m)
+        tblPr.append(cellMar)
+
+        for old in tbl.findall(qn("w:tblGrid")):
+            tbl.remove(old)
+        grid = OxmlElement("w:tblGrid")
+        gc = OxmlElement("w:gridCol")
+        gc.set(qn("w:w"), str(body_w))
+        grid.append(gc)
+        tblPr.addnext(grid)
+
+        cell = table.rows[0].cells[0]
+        _set_cell_width(cell, body_w)
+        tr = table.rows[0]._tr
+        trPr = tr.get_or_add_trPr()
+        for old in trPr.findall(qn("w:trHeight")):
+            trPr.remove(old)
+        trHeight = OxmlElement("w:trHeight")
+        trHeight.set(qn("w:val"), str(row_twips))
+        trHeight.set(qn("w:hRule"), "atLeast")
+        trPr.append(trHeight)
+
+        cp = cell.paragraphs[0]
+        cp.clear()
+        cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        _set_spacing_for_font(cp, font_pt, grid_line_pt=self.line_pt)
+        if not allow_wrap:
+            pPr = cp._p.get_or_add_pPr()
+            if pPr.find(qn("w:wordWrap")) is None:
+                ww = OxmlElement("w:wordWrap")
+                ww.set(qn("w:val"), "0")
+                pPr.append(ww)
+        run = cp.add_run(text)
+        _set_run_font(
+            run, name=font_face, size_pt=font_pt, color=RGBColor(255, 0, 0)
+        )
+
+    def _add_letter_abs_meta_row(
+        self,
+        doc: Document,
+        *,
+        left_lines: list[tuple[str, str]],
+        doc_number: str,
+        y_glyph_top_mm: float,
+    ) -> float:
+        """份号/密级/紧急 + 发文字号：纸面绝对定位；首行字顶 = y_glyph_top_mm。
+
+        行高用网格 ≈29pt（三行间距）；段内固定行距=3号字高、单元格顶对齐——
+        避免 `_set_cell_width` 默认垂直居中把字在 29pt 行里推下 ~10pt。
+        返回本块下沿（mm，相对纸顶）。
+        """
+        fangsong = self.fonts["fangsong"]
+        heiti = self.fonts["heiti"]
+        body_w = U.mm_to_twips(U.PAGE["body_width_mm"])
+        x_twips = U.mm_to_twips(U.PAGE["left_mm"])
+        y_twips = U.mm_to_twips(y_glyph_top_mm)
+        row_pt = float(self.line_pt)
+        glyph_pt = float(U.PT_3)
+        row_twips = max(200, int(round(row_pt * 20)))
+        n_rows = max(len(left_lines), 1)
+        half = body_w // 2
+
+        def _cell_top_align(cell) -> None:
+            tcPr = cell._tc.get_or_add_tcPr()
+            vAlign = tcPr.find(qn("w:vAlign"))
+            if vAlign is None:
+                vAlign = OxmlElement("w:vAlign")
+                tcPr.append(vAlign)
+            vAlign.set(qn("w:val"), "top")
+
+        table = doc.add_table(rows=n_rows, cols=2)
+        table.autofit = False
+        tbl = table._tbl
+        tblPr = tbl.tblPr
+        if tblPr is None:
+            tblPr = OxmlElement("w:tblPr")
+            tbl.insert(0, tblPr)
+        for tag in (
+            "tblW",
+            "tblBorders",
+            "tblCellMar",
+            "tblLayout",
+            "tblInd",
+            "jc",
+            "tblpPr",
+            "tblOverlap",
+        ):
+            for old in tblPr.findall(qn(f"w:{tag}")):
+                tblPr.remove(old)
+
+        tblW = OxmlElement("w:tblW")
+        tblW.set(qn("w:w"), str(body_w))
+        tblW.set(qn("w:type"), "dxa")
+        tblPr.append(tblW)
+        tblpPr = OxmlElement("w:tblpPr")
+        for k, v in (
+            ("w:leftFromText", "0"),
+            ("w:rightFromText", "0"),
+            ("w:topFromText", "0"),
+            ("w:bottomFromText", "0"),
+            ("w:vertAnchor", "page"),
+            ("w:horzAnchor", "page"),
+            ("w:tblpX", str(int(x_twips))),
+            ("w:tblpY", str(int(y_twips))),
+        ):
+            tblpPr.set(qn(k), v)
+        tblPr.append(tblpPr)
+        overlap = OxmlElement("w:tblOverlap")
+        overlap.set(qn("w:val"), "never")
+        tblPr.append(overlap)
+        layout = OxmlElement("w:tblLayout")
+        layout.set(qn("w:type"), "fixed")
+        tblPr.append(layout)
+        _clear_tbl_borders(tblPr)
+        cellMar = OxmlElement("w:tblCellMar")
+        for side in ("top", "left", "bottom", "right"):
+            m = OxmlElement(f"w:{side}")
+            m.set(qn("w:w"), "0")
+            m.set(qn("w:type"), "dxa")
+            cellMar.append(m)
+        tblPr.append(cellMar)
+        for old in tbl.findall(qn("w:tblGrid")):
+            tbl.remove(old)
+        grid = OxmlElement("w:tblGrid")
+        for w in (half, body_w - half):
+            gc = OxmlElement("w:gridCol")
+            gc.set(qn("w:w"), str(w))
+            grid.append(gc)
+        tblPr.addnext(grid)
+
+        for r_idx, row in enumerate(table.rows):
+            tr = row._tr
+            trPr = tr.get_or_add_trPr()
+            for old in trPr.findall(qn("w:trHeight")):
+                trPr.remove(old)
+            trHeight = OxmlElement("w:trHeight")
+            trHeight.set(qn("w:val"), str(row_twips))
+            trHeight.set(qn("w:hRule"), "exact")
+            trPr.append(trHeight)
+
+            left, right = row.cells
+            _set_cell_width(left, half)
+            _set_cell_width(right, body_w - half)
+            _cell_top_align(left)
+            _cell_top_align(right)
+            lp = left.paragraphs[0]
+            lp.clear()
+            lp.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            # 段内行距=字号，字贴单元格顶；行与行间距靠 trHeight=网格行距
+            _set_paragraph_spacing(lp, before_pt=0, after_pt=0, line_pt=glyph_pt)
+            _disable_snap_to_grid(lp)
+            if r_idx < len(left_lines):
+                kind, text = left_lines[r_idx]
+                run = lp.add_run(text)
+                face = fangsong if kind == "copy" else heiti
+                _set_run_font(run, name=face, size_pt=U.PT_3)
+            rp = right.paragraphs[0]
+            rp.clear()
+            rp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _set_paragraph_spacing(rp, before_pt=0, after_pt=0, line_pt=glyph_pt)
+            _disable_snap_to_grid(rp)
+            if r_idx == 0 and doc_number.strip():
+                rr = rp.add_run(doc_number.strip())
+                _set_run_font(rr, name=fangsong, size_pt=U.PT_3)
+
+        return y_glyph_top_mm + n_rows * _pt_to_mm(row_pt)
+
+    def _write_letter_banner(self, doc: Document, ir: LayoutIR) -> None:
+        """标志+双线+字号：均纸面绝对定位；正文流空 2 行后接标题（不垫高空段）。"""
+        from core.ir.letter import ensure_letter_mark
+
+        mark = ensure_letter_mark(ir.primary_org_mark())
+        mark_face = self.fonts["xiaobiaosong"]
+        mark_font_pt, allow_wrap = _minutes_mark_font_pt(mark, mark_face)
+
+        section = doc.sections[0]
+        section.top_margin = Mm(U.PAGE["top_mm"])
+
+        ink_inset_mm = _mark_ink_inset_mm(mark_font_pt, self.line_pt)
+        # 行框顶 = 30mm - ink → 墨迹顶 ≈ 30mm；墨迹底 = 30mm + 字号高
+        mark_line_top_mm = U.LETTER_MARK_FROM_PAPER_TOP_MM - ink_inset_mm
+        ink_bottom_mm = U.LETTER_MARK_FROM_PAPER_TOP_MM + _pt_to_mm(mark_font_pt)
+        # 标志底 → 双线 4mm（国标·强制）
+        double_y_mm = ink_bottom_mm + U.LETTER_DOUBLE_LINE_AFTER_MARK_MM
+        double_h_mm = U.LETTER_DOUBLE_LINE_GAP_MM
+        double_bottom_mm = double_y_mm + double_h_mm
+        # 字顶 = 双线底 + 14pt（不再用空段试凑）
+        meta_top_mm = double_bottom_mm + _pt_to_mm(U.LETTER_GAP_TO_DOUBLE_LINE_PT)
+
+        self._add_letter_abs_mark(
+            doc,
+            text=mark,
+            font_face=mark_face,
+            font_pt=mark_font_pt,
+            allow_wrap=allow_wrap,
+            y_line_top_mm=mark_line_top_mm,
+        )
+        self._add_letter_abs_double_line(
+            doc, thick_on_top=True, y_from_page_top_mm=double_y_mm
+        )
+
+        left_lines: list[tuple[str, str]] = []
+        if ir.copy_number.strip():
+            left_lines.append(("copy", ir.copy_number.strip()))
+        secret = _secret_display(ir)
+        if secret:
+            left_lines.append(("secret", secret))
+        if ir.urgency.strip():
+            left_lines.append(("urgency", ir.urgency.strip()))
+
+        has_meta = bool(left_lines or ir.doc_number.strip())
+        if has_meta:
+            self._add_letter_abs_meta_row(
+                doc,
+                left_lines=left_lines,
+                doc_number=ir.doc_number,
+                y_glyph_top_mm=meta_top_mm,
+            )
+
+        # 标志/双线/字号均已绝对定位。空二行接标题；浮动表行高=网格时流式锚点
+        # 会多顶约 (行高−字号)×系数，从第二空行扣掉，避免特急→标题变成 ~97pt。
+        _empty_grid_lines(doc, 1, self.line_pt)
+        second_pt = float(self.line_pt)
+        if has_meta:
+            nudge = max(
+                0.0,
+                (float(self.line_pt) - float(U.PT_3))
+                * float(U.LETTER_META_TITLE_GAP_NUDGE_RATIO),
+            )
+            second_pt = max(1.0, second_pt - nudge)
+        sp = doc.add_paragraph()
+        _set_paragraph_spacing(sp, before_pt=0, after_pt=0, line_pt=second_pt)
+        _set_run_font(sp.add_run(""), name=self.fonts["fangsong"], size_pt=U.PT_3)
+
+    def _write_letter_body(self, doc: Document, ir: LayoutIR) -> None:
+        """标题 → 空1行 → 主送（引擎加冒号）→ 正文 → 附件说明。"""
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        _set_spacing_for_font(p, U.PT_2, grid_line_pt=self.line_pt)
+        run = p.add_run(ir.title)
+        _set_run_font(run, name=self.fonts["xiaobiaosong"], size_pt=U.PT_2)
+
+        from core.ir.letter import strip_recipient_colon
+
+        recip = strip_recipient_colon(ir.recipient)
+        _empty_grid_lines(doc, 1, self.line_pt)
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        _set_paragraph_spacing(p, line_pt=self.line_pt)
+        run = p.add_run(recip + "：")
+        _set_run_font(run, name=self.fonts["fangsong"], size_pt=U.PT_3)
+
+        blocks = list(ir.body_tree or [])
+        for i, block in enumerate(blocks):
+            # 末段不要 keep_with_next，避免把「正文下空一行」的附件说明粘没
+            keep = i < len(blocks) - 1
+            self._write_block(doc, block, keep_with_next_heading=keep)
+
+        if ir.attachment_caption.strip():
+            # §7.3.4：正文下空一行
+            _empty_grid_lines(doc, 1, self.line_pt)
+            lines = _attachment_caption_lines(ir.attachment_caption)
+            # 左空二字起排「附件：」；悬挂 3 字 → 回行对齐附件名首字（OOXML hanging，避免退化成仅首行缩进）
+            left_twips = int(round(U.PT_3 * 5 * 20))
+            hang_twips = int(round(U.PT_3 * 3 * 20))
+            for i, line in enumerate(lines):
+                p = doc.add_paragraph()
+                _set_paragraph_spacing(p, line_pt=self.line_pt)
+                _disable_snap_to_grid(p)
+                if i == 0 and not line.startswith("附件"):
+                    line = "附件：" + line
+                pPr = p._p.get_or_add_pPr()
+                for old in pPr.findall(qn("w:ind")):
+                    pPr.remove(old)
+                ind = OxmlElement("w:ind")
+                ind.set(qn("w:left"), str(left_twips))
+                ind.set(qn("w:hanging"), str(hang_twips))
+                pPr.append(ind)
+                run = p.add_run(line)
+                _set_run_font(run, name=self.fonts["fangsong"], size_pt=U.PT_3)
+
+    def _write_letter_signature(self, doc: Document, ir: LayoutIR) -> None:
+        """有章口径：单机关以日期居中；2 机关同行并列；≥3 逐行；不生成印。"""
+        face = self.fonts["fangsong"]
+        orgs = _resolve_signature_orgs(ir)
+        if not orgs:
+            orgs = [ir.org_signature.strip()] if ir.org_signature.strip() else [""]
+
+        def _right_ind_pt(paragraph, right_pt: float) -> None:
+            """用 OOXML 写右缩进，避免段落格式被网格/对齐改写。"""
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _set_paragraph_spacing(paragraph, line_pt=self.line_pt)
+            _disable_snap_to_grid(paragraph)
+            pPr = paragraph._p.get_or_add_pPr()
+            for old in pPr.findall(qn("w:ind")):
+                pPr.remove(old)
+            ind = OxmlElement("w:ind")
+            ind.set(qn("w:right"), str(int(round(float(right_pt) * 20))))
+            pPr.append(ind)
+
+        if len(orgs) <= 1:
+            sig = orgs[0]
+            # 有章口径：日期右空四字；单机关署名与日期右缘齐平（同右空四字）
+            # 测宽「以日期居中」在部分字体下会偏成 74/64；齐平更稳且章位仍由右空四字确定
+            date_right_pt = 4.0 * float(U.PT_3)
+
+            p = doc.add_paragraph()
+            _right_ind_pt(p, date_right_pt)
+            p.paragraph_format.keep_with_next = True
+            p.paragraph_format.keep_together = True
+            run = p.add_run(sig)
+            _set_run_font(run, name=face, size_pt=U.PT_3)
+
+            p = doc.add_paragraph()
+            _right_ind_pt(p, date_right_pt)
+            p.paragraph_format.keep_together = True
+            run = p.add_run(ir.date)
+            _set_run_font(run, name=face, size_pt=U.PT_3)
+            return
+
+        one = float(U.PT_3)
+        body_pt = _body_width_pt()
+        date = ir.date
+        date_w = layout_text_width_pt(date, face, U.PT_3)
+        date_right = 4.0 * one
+
+        if len(orgs) == 2:
+            # 同一行左右并列；日期在两者下方居中（右空四字口径落在该居中位置）
+            row_text = _join_org_row(orgs)
+            row_w = layout_text_width_pt(row_text, face, U.PT_3)
+            date_center = body_pt - date_right - date_w / 2.0
+            row_left = date_center - row_w / 2.0
+            row_left = max(0.0, min(row_left, body_pt - row_w))
+
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            _set_paragraph_spacing(p, line_pt=self.line_pt)
+            _disable_snap_to_grid(p)
+            p.paragraph_format.left_indent = Pt(row_left)
+            p.paragraph_format.keep_with_next = True
+            p.paragraph_format.keep_together = True
+            run = p.add_run(row_text)
+            _set_run_font(run, name=face, size_pt=U.PT_3)
+
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _set_paragraph_spacing(p, line_pt=self.line_pt)
+            _disable_snap_to_grid(p)
+            p.paragraph_format.right_indent = Pt(date_right)
+            p.paragraph_format.keep_together = True
+            run = p.add_run(date)
+            _set_run_font(run, name=face, size_pt=U.PT_3)
+            return
+
+        # ≥3：逐行；日期在末行右下方（右空四字）
+        last_w = layout_text_width_pt(orgs[-1], face, U.PT_3)
+        last_right = date_right + (date_w - last_w) / 2.0
+        for org in orgs:
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _set_paragraph_spacing(p, line_pt=self.line_pt)
+            _disable_snap_to_grid(p)
+            org_w = layout_text_width_pt(org, face, U.PT_3)
+            org_right = last_right + (last_w - org_w) / 2.0
+            p.paragraph_format.right_indent = Pt(max(0.0, org_right))
+            p.paragraph_format.keep_with_next = True
+            p.paragraph_format.keep_together = True
+            run = p.add_run(org)
+            _set_run_font(run, name=face, size_pt=U.PT_3)
+
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        _set_paragraph_spacing(p, line_pt=self.line_pt)
+        _disable_snap_to_grid(p)
+        p.paragraph_format.right_indent = Pt(date_right)
+        p.paragraph_format.keep_together = True
+        run = p.add_run(date)
+        _set_run_font(run, name=face, size_pt=U.PT_3)
+
+    def _write_letter_banji(self, doc: Document, ir: LayoutIR) -> None:
+        """仅抄送；无印发、无分隔线。浮动钉在版心下缘（与第二条双线隔开，不独占次页）。"""
+        from core.ir.letter import strip_cc_prefix
+
+        cc_raw = strip_cc_prefix(ir.cc_recipients)
+        if not cc_raw:
+            sp = doc.add_paragraph()
+            _set_paragraph_spacing(sp, before_pt=0, after_pt=0, line_pt=1.0)
+            _disable_snap_to_grid(sp)
+            _set_run_font(sp.add_run(""), name=self.fonts["fangsong"], size_pt=0.5)
+            return
+
+        body_w = U.mm_to_twips(U.PAGE["body_width_mm"])
+        one = int(round(U.PT_4 * 20))
+        row_pt = U.PT_4 * 1.15
+        fangsong = self.fonts["fangsong"]
+        cc = "抄送：" + cc_raw
+        if not cc.endswith("。"):
+            cc += "。"
+
+        table = doc.add_table(rows=1, cols=1)
+        table.autofit = False
+        tbl = table._tbl
+        tblPr = tbl.tblPr
+        if tblPr is None:
+            tblPr = OxmlElement("w:tblPr")
+            tbl.insert(0, tblPr)
+        for tag in (
+            "tblW",
+            "tblpPr",
+            "tblOverlap",
+            "tblBorders",
+            "tblLayout",
+            "tblCellMar",
+            "jc",
+            "tblInd",
+        ):
+            for old in tblPr.findall(qn(f"w:{tag}")):
+                tblPr.remove(old)
+
+        tblW = OxmlElement("w:tblW")
+        tblW.set(qn("w:w"), str(body_w))
+        tblW.set(qn("w:type"), "dxa")
+        tblPr.append(tblW)
+
+        # 相对版心沉底：落在 262mm 附近，不跟红双线抢下白边
+        tblpPr = OxmlElement("w:tblpPr")
+        for k, v in (
+            ("w:leftFromText", "0"),
+            ("w:rightFromText", "0"),
+            ("w:topFromText", "0"),
+            ("w:bottomFromText", "0"),
+            ("w:vertAnchor", "margin"),
+            ("w:horzAnchor", "margin"),
+            ("w:tblpXSpec", "left"),
+            ("w:tblpYSpec", "bottom"),
+        ):
+            tblpPr.set(qn(k), v)
+        tblPr.append(tblpPr)
+        overlap = OxmlElement("w:tblOverlap")
+        overlap.set(qn("w:val"), "never")
+        tblPr.append(overlap)
+
+        layout = OxmlElement("w:tblLayout")
+        layout.set(qn("w:type"), "fixed")
+        tblPr.append(layout)
+        _clear_tbl_borders(tblPr)
+
+        cellMar = OxmlElement("w:tblCellMar")
+        for side in ("top", "left", "bottom", "right"):
+            m = OxmlElement(f"w:{side}")
+            m.set(qn("w:w"), "0")
+            m.set(qn("w:type"), "dxa")
+            cellMar.append(m)
+        tblPr.append(cellMar)
+
+        cell = table.rows[0].cells[0]
+        _set_cell_width(cell, body_w)
+        _row_cant_split(table.rows[0])
+        p = cell.paragraphs[0]
+        p.clear()
+        _set_paragraph_spacing(p, before_pt=0, after_pt=0, line_pt=row_pt)
+        _disable_snap_to_grid(p)
+        pPr = p._p.get_or_add_pPr()
+        for old in pPr.findall(qn("w:ind")):
+            pPr.remove(old)
+        ind = OxmlElement("w:ind")
+        # §7.4.2：左右各空一字；续行对齐冒号后
+        ind.set(qn("w:left"), str(4 * one))
+        ind.set(qn("w:right"), str(one))
+        ind.set(qn("w:hanging"), str(3 * one))
+        pPr.append(ind)
+        run = p.add_run(cc)
+        _set_run_font(run, name=fangsong, size_pt=U.PT_4)
+
     def _write_attachment_pages(self, doc: Document, ir: LayoutIR) -> None:
         """附件另页：不做国标标题居中等排版；仅「附件N」+ 空行 + 原文。"""
         items = list(ir.attachments or [])
@@ -1490,16 +2256,17 @@ class DocxEngine:
         _set_run_font(run, name=name, size_pt=size, bold=bold)
 
     def _write_signature(self, doc: Document, ir: LayoutIR):
-        # 有章：印章顶距正文/附件「一行之内」→ 不空行；无章：正文/附件下空一行
-        if ir.seal_mode != SealMode.STAMP:
+        # 有章/信函 reserved：印章顶距正文/附件「一行之内」→ 不空行；无章：正文/附件下空一行
+        if ir.seal_mode not in (SealMode.STAMP, SealMode.RESERVED):
             _empty_grid_lines(doc, 1, self.line_pt)
 
         face = self.fonts["fangsong"]
         orgs = _resolve_signature_orgs(ir)
         if len(orgs) <= 1:
             sig = orgs[0] if orgs else (ir.org_signature or "")
+            mode = ir.seal_mode or SealMode.STAMP
             sig_right_pt, date_right_pt = _signature_right_indents(
-                sig, ir.date, ir.seal_mode, face
+                sig, ir.date, mode, face
             )
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -1521,7 +2288,7 @@ class DocxEngine:
             _set_run_font(run, name=face, size_pt=U.PT_3)
             return
 
-        if ir.seal_mode == SealMode.STAMP:
+        if ir.seal_mode in (SealMode.STAMP, SealMode.RESERVED):
             self._write_multi_signature_stamp(doc, orgs, ir.date, face)
         else:
             self._write_multi_signature_no_stamp(doc, orgs, ir.date, face)
