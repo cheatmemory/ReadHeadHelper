@@ -19,6 +19,13 @@ _NOTE = re.compile(r"^[（(].+[）)]$")
 _CC = re.compile(r"^抄送\s*[:：]")
 _PRINT_ORG = re.compile(r"^印发机关\s*[:：]\s*(.+)$")
 _PRINT_DATE = re.compile(r"^(?:印发日期\s*[:：]\s*)?(.+?印发)\s*$")
+# 版记常见一行：「机关　　YYYY年M月D日印发」
+_PRINT_LINE = re.compile(
+    r"^(.+?)[\s　]+"
+    r"((?:\d{4}|[〇零一二三四五六七八九十]{2,4})年"
+    r"(?:[01]?\d|[〇零一二三四五六七八九十]+)月"
+    r"(?:[0-3]?\d|[〇零一二三四五六七八九十]+)日)\s*印发\s*$"
+)
 _DATE = re.compile(
     r"^((?:\d{4}|[〇零一二三四五六七八九十]{2,4})年"
     r"(?:[01]?\d|[〇零一二三四五六七八九十]+)月"
@@ -91,11 +98,20 @@ def extract_order_fields(text: str) -> dict:
             print_org = m_po.group(1).strip()
             footer_zone_start = min(footer_zone_start, i)
             continue
+        m_pl = _PRINT_LINE.match(ln)
+        if m_pl:
+            print_org = m_pl.group(1).strip()
+            print_date = m_pl.group(2).strip()
+            footer_zone_start = min(footer_zone_start, i)
+            continue
         m_pd = _PRINT_DATE.match(ln)
         if m_pd and "印发" in ln:
-            print_date = m_pd.group(1).replace("印发", "").strip()
-            if not print_date:
-                print_date = re.sub(r"印发\s*$", "", ln).strip()
+            # 避免把「机关＋日期印发」整行误塞进日期
+            rest = m_pd.group(1).replace("印发", "").strip()
+            if _DATE.match(rest):
+                print_date = rest
+            elif not print_org and not print_date:
+                print_date = rest
             footer_zone_start = min(footer_zone_start, i)
             continue
         if _NOTE.match(ln) or (ln.startswith("（") and ln.endswith("）")):
