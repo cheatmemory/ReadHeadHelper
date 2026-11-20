@@ -1127,7 +1127,7 @@
             <div class="section" id="section-doc-kind">
               <div class="section-h">
                 <h2><span class="dot"></span>文种</h2>
-                <span class="hint">识别可自动切到纪要；可手动改回</span>
+                <span class="hint">识别可自动切到纪要/命令；可手动改回</span>
               </div>
               <div class="seal-group" role="radiogroup" aria-label="文种">
                 <button type="button" class="kind-option is-on" data-kind="general" role="radio" aria-checked="true">
@@ -1137,6 +1137,10 @@
                 <button type="button" class="kind-option" data-kind="minutes" role="radio" aria-checked="false">
                   <strong>会议纪要</strong>
                   <span>纪要标志、期号、出席名单；无红线、无印章。</span>
+                </button>
+                <button type="button" class="kind-option" data-kind="order" role="radio" aria-checked="false">
+                  <strong>命令（令）</strong>
+                  <span>令号、签发人职务+签名章占位；无标题、无红线、无印章。</span>
                 </button>
               </div>
             </div>
@@ -1211,6 +1215,12 @@
                   </div>
                   <input id="f-issue" value="" placeholder="如 第18期（无空格）" disabled />
                 </div>
+                <div class="field full" id="field-order-no" data-req-key="order_no" hidden>
+                  <div class="field-head">
+                    <label for="f-order">令号<span class="req">*</span></label>
+                  </div>
+                  <input id="f-order" value="" placeholder="如 第1号（无空格）" />
+                </div>
               </div>
             </div>
 
@@ -1252,6 +1262,21 @@
                   <input type="file" id="attach-file-input" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple hidden />
                   <div class="attach-file-list" id="attach-file-list"></div>
                   <span class="hint">每个附件另起一页：左上角「附件N」+ 空一行 + 原文（含表格/图表），不做国标附件排版</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="section" id="section-order-signers" hidden>
+              <div class="section-h">
+                <h2><span class="dot"></span>签发人职务</h2>
+                <span class="hint">只填职务（如「市长」）；姓名由签名章体现；联合多机关用顿号，顺序即排版顺序</span>
+              </div>
+              <div class="grid-2">
+                <div class="field full" data-req-key="signer_titles" id="field-order-titles">
+                  <div class="field-head">
+                    <label for="f-order-titles">职务<span class="req">*</span></label>
+                  </div>
+                  <input id="f-order-titles" value="" placeholder="如 市长（联合：市长、区长）" />
                 </div>
               </div>
             </div>
@@ -1346,7 +1371,7 @@
               <div class="office-preview-scroll">
                 <div class="office-preview-pages">
                   <div class="office-preview-empty is-wait">
-                    <strong>等待预览条件</strong><br />通用文请先选有章/无章；纪要请补全标志、正文与出席（或本件无）
+                    <strong>等待预览条件</strong><br />通用文请先选有章/无章；纪要/命令请补全对应必填
                   </div>
                 </div>
               </div>
@@ -1500,35 +1525,61 @@
     function isMinutes() {
       return docKind === "minutes";
     }
+    function isOrder() {
+      return docKind === "order";
+    }
 
     function setDocKind(kind, { fromUser } = {}) {
-      docKind = kind === "minutes" ? "minutes" : "general";
+      if (kind === "minutes") docKind = "minutes";
+      else if (kind === "order") docKind = "order";
+      else docKind = "general";
       document.querySelectorAll(".kind-option").forEach((btn) => {
         const on = btn.dataset.kind === docKind;
         btn.classList.toggle("is-on", on);
         btn.setAttribute("aria-checked", on ? "true" : "false");
       });
       const minutes = isMinutes();
+      const order = isOrder();
+      const noSeal = minutes || order;
       const sealSec = document.getElementById("section-seal");
-      if (sealSec) sealSec.hidden = minutes;
+      if (sealSec) sealSec.hidden = noSeal;
       const listsSec = document.getElementById("section-minutes-lists");
       if (listsSec) listsSec.hidden = !minutes;
+      const orderSec = document.getElementById("section-order-signers");
+      if (orderSec) orderSec.hidden = !order;
       const issueField = document.getElementById("field-issue-no");
       if (issueField) issueField.hidden = !minutes;
+      const orderNoField = document.getElementById("field-order-no");
+      if (orderNoField) orderNoField.hidden = !order;
       const docnoField = document.getElementById("field-doc-number");
-      if (docnoField) docnoField.hidden = minutes;
+      if (docnoField) docnoField.hidden = minutes || order;
       const signersField = document.getElementById("f-signers")?.closest(".field");
-      if (signersField) signersField.hidden = minutes;
+      if (signersField) signersField.hidden = minutes || order;
       const orgSigField = document.getElementById("field-org-signature");
-      if (orgSigField) orgSigField.hidden = minutes;
+      if (orgSigField) orgSigField.hidden = minutes || order;
+      const titleField = document.getElementById("field-title");
+      if (titleField) titleField.hidden = order;
+      // 命令：份号/密级/紧急本基线不提供
+      ["f-copy", "f-secret", "f-urgency"].forEach((id) => {
+        const f = document.getElementById(id)?.closest(".field");
+        if (f) f.hidden = order;
+      });
 
       const labelOrg = document.getElementById("label-org");
-      if (labelOrg) labelOrg.textContent = minutes ? "纪要标志" : "发文机关标志";
+      if (labelOrg) {
+        labelOrg.textContent = minutes
+          ? "纪要标志"
+          : order
+            ? "发文机关标志"
+            : "发文机关标志";
+      }
       const fOrg = document.getElementById("f-org");
       if (fOrg) {
         fOrg.placeholder = minutes
           ? "如 江州市人民政府常务会议纪要"
-          : "主办在前；联合用顿号，如 甲局、乙局";
+          : order
+            ? "如 江州市人民政府令（以命令/令结尾）"
+            : "主办在前；联合用顿号，如 甲局、乙局";
       }
 
       const toggleOpt = (reqId, optId, optional) => {
@@ -1537,25 +1588,24 @@
         if (req) req.hidden = optional;
         if (opt) opt.hidden = !optional;
       };
-      toggleOpt("req-title", "opt-title", minutes);
+      toggleOpt("req-title", "opt-title", minutes || order);
       toggleOpt("req-date", "opt-date", minutes);
-      toggleOpt("req-print-org", "opt-print-org", minutes);
-      toggleOpt("req-print-date", "opt-print-date", minutes);
+      // 命令：日期必填；印发选填（同进同退由校验）
+      toggleOpt("req-print-org", "opt-print-org", minutes || order);
+      toggleOpt("req-print-date", "opt-print-date", minutes || order);
 
       const toFooter = document.getElementById("f-to-footer");
       if (toFooter) {
-        if (minutes) {
-          // 纪要：主送只进版记，按钮强制开并隐藏
+        if (minutes || order) {
           toFooter.setAttribute("aria-pressed", "true");
           toFooter.hidden = true;
         } else {
-          // 普通公文：默认主体排主送，不排版记
           toFooter.setAttribute("aria-pressed", "false");
           toFooter.hidden = false;
         }
       }
 
-      if (minutes) {
+      if (noSeal) {
         sealMode = null;
         document.querySelectorAll(".seal-option").forEach((b) => {
           b.classList.remove("selected", "is-on");
@@ -1563,7 +1613,6 @@
         });
       }
       refreshExportGate();
-      // 切文种后立即按新门槛刷预览（纪要不再卡 seal）
       if (step >= 2) requestOfficePreview({ force: true });
     }
 
@@ -1697,7 +1746,7 @@
     }
 
     function previewUnlocked() {
-      if (isMinutes()) return Object.values(requiredState()).every(Boolean);
+      if (isMinutes() || isOrder()) return Object.values(requiredState()).every(Boolean);
       return Boolean(sealMode);
     }
 
@@ -1709,11 +1758,16 @@
         return;
       }
       if (!previewUnlocked()) {
-        renderOfficePreviewEmpty(
-          "wait",
-          isMinutes() ? "等待补全纪要必填" : "等待选择版式",
-          isMinutes() ? "需纪要标志、正文，以及出席或「本件无」" : "请先选择有章 / 无章版式"
-        );
+        let title = "等待选择版式";
+        let detail = "请先选择有章 / 无章版式";
+        if (isMinutes()) {
+          title = "等待补全纪要必填";
+          detail = "需纪要标志、正文，以及出席或「本件无」";
+        } else if (isOrder()) {
+          title = "等待补全命令必填";
+          detail = "需标志、令号、正文、职务与成文日期";
+        }
+        renderOfficePreviewEmpty("wait", title, detail);
         return;
       }
       renderOfficePreviewEmpty("wait", "暂无预览", "停手或离开输入框后将自动生成");
@@ -1867,6 +1921,18 @@
           attendance: !!(fieldVal("f-attendance") || attendanceAbsentConfirmed()),
         };
       }
+      if (isOrder()) {
+        const po = fieldVal("f-print-org");
+        const pd = fieldVal("f-print-date");
+        return {
+          org_mark: !!fieldVal("f-org"),
+          order_no: !!fieldVal("f-order"),
+          body: bodyHasText(),
+          signer_titles: !!fieldVal("f-order-titles"),
+          date: !!fieldVal("f-date"),
+          print_pair: !(po && !pd) && !(!po && pd),
+        };
+      }
       return {
         org_mark: !!fieldVal("f-org"),
         doc_number: !!fieldVal("f-docno"),
@@ -1895,8 +1961,18 @@
       { key: "attendance", label: "出席名单", target: '[data-req-key="attendance"]', focus: "#f-attendance", check: (st) => !st.attendance },
     ];
 
+    const MISSING_REQ_ITEMS_ORDER = [
+      { key: "org_mark", label: "发文机关标志", target: '[data-req-key="org_mark"]', focus: "#f-org", check: (st) => !st.org_mark },
+      { key: "order_no", label: "令号", target: '[data-req-key="order_no"]', focus: "#f-order", check: (st) => !st.order_no },
+      { key: "signer_titles", label: "签发人职务", target: '[data-req-key="signer_titles"]', focus: "#f-order-titles", check: (st) => !st.signer_titles },
+      { key: "date", label: "成文日期", target: '[data-req-key="date"]', focus: "#f-date", check: (st) => !st.date },
+      { key: "print_pair", label: "印发机关/日期", target: '[data-req-key="print_org"]', focus: "#f-print-org", check: (st) => !st.print_pair },
+    ];
+
     function missingReqItems() {
-      return isMinutes() ? MISSING_REQ_ITEMS_MINUTES : MISSING_REQ_ITEMS_GENERAL;
+      if (isMinutes()) return MISSING_REQ_ITEMS_MINUTES;
+      if (isOrder()) return MISSING_REQ_ITEMS_ORDER;
+      return MISSING_REQ_ITEMS_GENERAL;
     }
 
     function jumpToMissingTarget(item) {
@@ -1962,7 +2038,7 @@
     function refreshExportGate() {
       refreshRequiredChecklist();
       const st = requiredState();
-      const ok = isMinutes()
+      const ok = (isMinutes() || isOrder())
         ? Object.values(st).every(Boolean)
         : Boolean(sealMode);
       const confirmAlert = document.getElementById("confirm-alert");
@@ -1972,18 +2048,26 @@
         if (ok) confirmAlert.classList.remove("error");
       }
       if (alertText) {
-        alertText.innerHTML = isMinutes()
-          ? "纪要导出需：<strong>纪要标志</strong>、<strong>正文</strong>，以及出席名单或勾选「本件无」。"
-          : "请先选择<strong>有章 / 无章版式</strong>。未选择时无法进入导出。";
+        if (isMinutes()) {
+          alertText.innerHTML = "纪要导出需：<strong>纪要标志</strong>、<strong>正文</strong>，以及出席名单或勾选「本件无」。";
+        } else if (isOrder()) {
+          alertText.innerHTML = "命令导出需：<strong>标志</strong>、<strong>令号</strong>、<strong>正文</strong>、<strong>职务</strong>、<strong>成文日期</strong>。";
+        } else {
+          alertText.innerHTML = "请先选择<strong>有章 / 无章版式</strong>。未选择时无法进入导出。";
+        }
       }
       exportAlert.style.display = ok ? "none" : "flex";
       document.getElementById("export-alert-text").textContent = ok
         ? ""
         : (isMinutes()
           ? "纪要必填未齐（标志 / 正文 / 出席或本件无），请返回「确认要素」补全。"
-          : "尚未选择落款版式（seal_mode），无法导出。请返回「确认要素」选择。");
+          : isOrder()
+            ? "命令必填未齐（标志 / 令号 / 正文 / 职务 / 日期），请返回「确认要素」补全。"
+            : "尚未选择落款版式（seal_mode），无法导出。请返回「确认要素」选择。");
       if (isMinutes()) {
         sealChip.textContent = "文种：会议纪要";
+      } else if (isOrder()) {
+        sealChip.textContent = "文种：命令（令）";
       } else {
         sealChip.textContent = sealMode
           ? (sealMode === "stamp_layout" ? "版式：有章" : "版式：无章")
@@ -2167,12 +2251,14 @@
       setFieldValue("f-org", f.org_mark, false);
       setFieldValue("f-docno", f.doc_number, false);
       setFieldValue("f-issue", f.issue_no);
+      setFieldValue("f-order", f.order_no, false);
+      setFieldValue("f-order-titles", f.issuer_sign || "", false);
       setFieldValue("f-title", f.title, false);
       setFieldValue("f-to", f.recipient);
       {
         const toFooter = document.getElementById("f-to-footer");
         if (toFooter) {
-          if (isMinutes()) {
+          if (isMinutes() || isOrder()) {
             toFooter.setAttribute("aria-pressed", "true");
           } else {
             // 普通公文默认不排版记；仅识别结果明确要求时才开
@@ -2184,14 +2270,19 @@
         }
       }
       setFieldValue("f-attach", f.attachment_caption);
-      // 纪要：发文字号/机关署名不参与排版，清空避免误当必填残值
-      if (isMinutes()) {
+      // 纪要/命令：发文字号/机关署名不参与排版，清空避免误当必填残值
+      if (isMinutes() || isOrder()) {
         setFieldValue("f-docno", "", false);
         setFieldValue("f-orgsig", "", false);
         const docno = document.getElementById("f-docno");
         const orgsig = document.getElementById("f-orgsig");
         if (docno) docno.value = "";
         if (orgsig) orgsig.value = "";
+        if (isOrder()) {
+          setFieldValue("f-title", "", false);
+          const title = document.getElementById("f-title");
+          if (title) title.value = "";
+        }
       } else {
         setFieldValue("f-orgsig", f.org_signature, false);
       }
@@ -2336,19 +2427,21 @@
       });
       return {
         doc_kind: docKind,
-        seal_mode: isMinutes() ? null : sealMode,
+        seal_mode: (isMinutes() || isOrder()) ? null : sealMode,
         fields: {
-          copy_number: val("f-copy"),
-          secret_combo: val("f-secret"),
-          urgency: val("f-urgency"),
-          issuer_sign: val("f-signers"),
+          copy_number: isOrder() ? "" : val("f-copy"),
+          secret_combo: isOrder() ? "" : val("f-secret"),
+          urgency: isOrder() ? "" : val("f-urgency"),
+          issuer_sign: isOrder() ? val("f-order-titles") : val("f-signers"),
+          signer_titles: isOrder() ? val("f-order-titles") : "",
           org_mark: val("f-org"),
-          doc_number: isMinutes() ? "" : val("f-docno"),
+          doc_number: (isMinutes() || isOrder()) ? "" : val("f-docno"),
           issue_no: val("f-issue"),
-          title: val("f-title"),
+          order_no: val("f-order"),
+          title: isOrder() ? "" : val("f-title"),
           recipient: val("f-to"),
           attachment_caption: val("f-attach"),
-          org_signature: isMinutes() ? "" : val("f-orgsig"),
+          org_signature: (isMinutes() || isOrder()) ? "" : val("f-orgsig"),
           date: val("f-date"),
           note: val("f-note"),
           cc_recipients: val("f-cc"),
@@ -2358,7 +2451,7 @@
           leave: val("f-leave"),
           liexi: val("f-liexi"),
           attendance_absent_confirmed: attendanceAbsentConfirmed(),
-          recipients_in_footer: isMinutes()
+          recipients_in_footer: (isMinutes() || isOrder())
             ? true
             : document.getElementById("f-to-footer")?.getAttribute("aria-pressed") === "true",
         },
@@ -2522,7 +2615,13 @@
 
     async function doExport() {
       if (!previewUnlocked()) {
-        showToast(isMinutes() ? "纪要必填未齐，无法导出" : "未选择落款版式，无法导出");
+        showToast(
+          isMinutes()
+            ? "纪要必填未齐，无法导出"
+            : isOrder()
+              ? "命令必填未齐，无法导出"
+              : "未选择落款版式，无法导出"
+        );
         return;
       }
       btnNext.disabled = true;
@@ -2544,7 +2643,13 @@
       if (step === 2) {
         if (!previewUnlocked()) {
           document.getElementById("confirm-alert").classList.add("error");
-          showToast(isMinutes() ? "请补全纪要必填（标志 / 正文 / 出席或本件无）" : "请先选择有章 / 无章版式");
+          showToast(
+            isMinutes()
+              ? "请补全纪要必填（标志 / 正文 / 出席或本件无）"
+              : isOrder()
+                ? "请补全命令必填（标志 / 令号 / 正文 / 职务 / 日期）"
+                : "请先选择有章 / 无章版式"
+          );
           return;
         }
         document.getElementById("confirm-alert").classList.remove("error");
@@ -2650,13 +2755,19 @@
     document.querySelectorAll(".kind-option").forEach((btn) => {
       btn.addEventListener("click", () => {
         setDocKind(btn.dataset.kind, { fromUser: true });
-        showToast(isMinutes() ? "已选：会议纪要" : "已选：通用公文");
+        showToast(
+          isMinutes()
+            ? "已选：会议纪要"
+            : isOrder()
+              ? "已选：命令（令）"
+              : "已选：通用公文"
+        );
       });
     });
 
     document.querySelectorAll(".seal-option").forEach((btn) => {
       btn.addEventListener("click", () => {
-        if (isMinutes()) return;
+        if (isMinutes() || isOrder()) return;
         sealMode = btn.dataset.seal;
         document.querySelectorAll(".seal-option").forEach((b) => {
           const on = b === btn;

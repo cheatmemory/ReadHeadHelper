@@ -13,6 +13,7 @@ from docx.shared import Mm, Pt, RGBColor, Twips
 
 from core.body_structure.parser import normalize_structure_markers
 from core.ir.minutes import format_issue_no
+from core.ir.order import format_order_no
 from core.ir.schema import BodyBlock, LayoutIR, SealMode
 from core.layout import units as U
 from core.layout.attach_merge import append_docx_body, load_attachment_bytes
@@ -546,6 +547,8 @@ class DocxEngine:
     def render(self, ir: LayoutIR, out_path: str | Path) -> Path:
         if ir.is_minutes():
             return self._render_minutes(ir, out_path)
+        if ir.is_order():
+            return self._render_order(ir, out_path)
 
         if ir.seal_mode is None:
             raise ValueError("seal_mode 未设置，拒绝导出")
@@ -800,6 +803,278 @@ class DocxEngine:
         # 与样例一致：版记浮动钉底；正文与表之间不插空段（空段会掉到末页上方，
         # 再加钉底 → 中间大片留白）。防压由浮动 + tblOverlap=never 保证。
         # 表后 1pt 空段：消除钉底后多出一页空白（baseline §13）。
+        self._write_banji(doc, ir, require_print=False, pin_bottom=True)
+        sp = doc.add_paragraph()
+        _set_paragraph_spacing(sp, before_pt=0, after_pt=0, line_pt=1.0)
+        _disable_snap_to_grid(sp)
+        _set_run_font(sp.add_run(""), name=self.fonts["fangsong"], size_pt=0.5)
+
+    # ── 命令（令）──────────────────────────────────────────────
+
+    def _render_order(self, ir: LayoutIR, out_path: str | Path) -> Path:
+        """命令特定格式（docs/baselines/命令.md）。无红线、无 seal_mode、无标题。"""
+        missing = ir.missing_required()
+        if missing:
+            raise ValueError("必填缺失：" + "、".join(missing))
+
+        doc = Document()
+        _set_page_and_grid(doc)
+        _setup_page_numbers(doc, songti=self.fonts["songti"])
+        if doc.paragraphs:
+            doc.paragraphs[0].clear()
+
+        self._write_order_banner(doc, ir)
+        self._write_order_body(doc, ir)
+        self._write_order_signers_date_note(doc, ir)
+        self._write_attachment_pages(doc, ir)
+        self._write_order_banji(doc, ir)
+
+        out_path = Path(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(out_path))
+        return out_path
+
+    def _write_order_banner(self, doc: Document, ir: LayoutIR) -> None:
+        """标志（红小标宋，墨迹顶=版心顶+20mm）→ 空2行 → 令号 → 空2行。"""
+        mark = ir.primary_org_mark().strip()
+        mark_face = self.fonts["xiaobiaosong"]
+        # 与纪要同算法（≥26pt 单行优先）
+        mark_font_pt, allow_wrap = _minutes_mark_font_pt(mark, mark_face)
+
+        ink_inset_mm = _mark_ink_inset_mm(mark_font_pt, self.line_pt)
+        spacer_mm = max(0.0, U.ORDER_MARK_FROM_BODY_TOP_MM - ink_inset_mm)
+        if spacer_mm > 0.05:
+            spacer_pt = spacer_mm / U.MM_PER_INCH * 72.0
+            sp = doc.add_paragraph()
+            _set_paragraph_spacing(sp, before_pt=0, after_pt=0, line_pt=spacer_pt)
+            _disable_snap_to_grid(sp)
+            _set_run_font(sp.add_run(""), name=self.fonts["fangsong"], size_pt=0.5)
+
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        _set_spacing_for_font(p, mark_font_pt, grid_line_pt=self.line_pt)
+        if not allow_wrap:
+            pPr = p._p.get_or_add_pPr()
+            if pPr.find(qn("w:wordWrap")) is None:
+                ww = OxmlElement("w:wordWrap")
+                ww.set(qn("w:val"), "0")
+                pPr.append(ww)
+        run = p.add_run(mark)
+        _set_run_font(
+            run,
+            name=mark_face,
+            size_pt=mark_font_pt,
+            color=RGBColor(255, 0, 0),
+        )
+
+        _empty_grid_lines(doc, 2, self.line_pt)
+        order_no = format_order_no(ir.order_no)
+        ip = doc.add_paragraph()
+        ip.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        _set_paragraph_spacing(ip, line_pt=self.line_pt)
+        irun = ip.add_run(order_no)
+        _set_run_font(irun, name=self.fonts["fangsong"], size_pt=U.PT_3)
+        _empty_grid_lines(doc, 2, self.line_pt)
+
+    def _write_order_body(self, doc: Document, ir: LayoutIR) -> None:
+        """无标题；正文 + 可选附件说明（正文下空 1 行）。"""
+        blocks = list(ir.body_tree or [])
+        for i, block in enumerate(blocks):
+            nxt = blocks[i + 1] if i + 1 < len(blocks) else None
+            keep = (
+                block.level in {"h1", "h2", "h3", "h4"}
+                and nxt is not None
+                and (nxt.level or "p") == "p"
+            )
+            self._write_block(doc, block, keep_with_next_heading=keep)
+
+        if ir.attachment_caption.strip():
+            _empty_grid_lines(doc, 1, self.line_pt)
+            lines = _attachment_caption_lines(ir.attachment_caption)
+            name_align = Pt(U.PT_3 * 5)
+            for i, line in enumerate(lines):
+                p = doc.add_paragraph()
+                _set_paragraph_spacing(p, line_pt=self.line_pt)
+                line = re.sub(r"^(\d+)\s*[.．、]\s*", r"\1. ", line.strip())
+                if i == 0:
+                    if not line.startswith("附件"):
+                        line = "附件：" + line
+                    else:
+                        line = re.sub(
+                            r"^(附件\s*[:：]\s*)(\d+)\s*[.．、]\s*",
+                            r"附件：\2. ",
+                            line,
+                        )
+                    p.paragraph_format.left_indent = name_align
+                    p.paragraph_format.first_line_indent = Pt(-U.PT_3 * 3)
+                else:
+                    p.paragraph_format.left_indent = name_align
+                run = p.add_run(line)
+                _set_run_font(run, name=self.fonts["fangsong"], size_pt=U.PT_3)
+
+    def _write_order_signer_row(self, doc: Document, title: str) -> None:
+        """一组：职务（左）+ 间隙二字 + 扁长方章位；表右缘距版心右空四字。"""
+        face = self.fonts["fangsong"]
+        one = float(U.PT_3)
+        right_pt = 4.0 * one
+        gap_pt = 2.0 * one
+        seal_w_twips = U.mm_to_twips(U.ORDER_SEAL_WIDTH_MM)
+        seal_h_twips = U.mm_to_twips(U.ORDER_SEAL_HEIGHT_MM)
+        gap_twips = int(round(gap_pt * 20))
+        title_w = layout_text_width_pt(title, face, U.PT_3)
+        title_twips = max(int(round(title_w * 20)) + 20, int(round(one * 20)))
+        table_w = title_twips + gap_twips + seal_w_twips
+        body_twips = U.mm_to_twips(U.PAGE["body_width_mm"])
+        right_twips = int(round(right_pt * 20))
+        left_ind = max(0, body_twips - right_twips - table_w)
+
+        table = doc.add_table(rows=1, cols=3)
+        table.autofit = False
+        tbl = table._tbl
+        tblPr = tbl.tblPr
+        if tblPr is None:
+            tblPr = OxmlElement("w:tblPr")
+            tbl.insert(0, tblPr)
+        for tag in ("w:tblW", "w:tblInd", "w:tblBorders", "w:tblLayout", "w:jc", "w:tblCellMar"):
+            for old in tblPr.findall(qn(tag)):
+                tblPr.remove(old)
+
+        tblW = OxmlElement("w:tblW")
+        tblW.set(qn("w:w"), str(table_w))
+        tblW.set(qn("w:type"), "dxa")
+        tblPr.append(tblW)
+
+        tblInd = OxmlElement("w:tblInd")
+        tblInd.set(qn("w:w"), str(left_ind))
+        tblInd.set(qn("w:type"), "dxa")
+        tblPr.append(tblInd)
+
+        layout = OxmlElement("w:tblLayout")
+        layout.set(qn("w:type"), "fixed")
+        tblPr.append(layout)
+
+        borders = OxmlElement("w:tblBorders")
+        for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+            el = OxmlElement(f"w:{edge}")
+            el.set(qn("w:val"), "nil")
+            el.set(qn("w:sz"), "0")
+            el.set(qn("w:space"), "0")
+            el.set(qn("w:color"), "auto")
+            borders.append(el)
+        tblPr.append(borders)
+
+        cell_mar = OxmlElement("w:tblCellMar")
+        for side in ("top", "left", "bottom", "right"):
+            m = OxmlElement(f"w:{side}")
+            m.set(qn("w:w"), "0")
+            m.set(qn("w:type"), "dxa")
+            cell_mar.append(m)
+        tblPr.append(cell_mar)
+
+        for old in tbl.findall(qn("w:tblGrid")):
+            tbl.remove(old)
+        grid = OxmlElement("w:tblGrid")
+        for w in (title_twips, gap_twips, seal_w_twips):
+            gc = OxmlElement("w:gridCol")
+            gc.set(qn("w:w"), str(w))
+            grid.append(gc)
+        tbl.insert(1, grid)
+
+        tr = table.rows[0]._tr
+        trPr = tr.get_or_add_trPr()
+        for old in trPr.findall(qn("w:trHeight")):
+            trPr.remove(old)
+        trH = OxmlElement("w:trHeight")
+        trH.set(qn("w:val"), str(seal_h_twips))
+        trH.set(qn("w:hRule"), "exact")
+        trPr.append(trH)
+
+        widths = (title_twips, gap_twips, seal_w_twips)
+        for idx, cell in enumerate(table.rows[0].cells):
+            tc = cell._tc
+            tcPr = tc.get_or_add_tcPr()
+            for old in tcPr.findall(qn("w:tcW")):
+                tcPr.remove(old)
+            tcW = OxmlElement("w:tcW")
+            tcW.set(qn("w:w"), str(widths[idx]))
+            tcW.set(qn("w:type"), "dxa")
+            tcPr.append(tcW)
+            for old in tcPr.findall(qn("w:vAlign")):
+                tcPr.remove(old)
+            vAlign = OxmlElement("w:vAlign")
+            vAlign.set(qn("w:val"), "center")
+            tcPr.append(vAlign)
+
+            # 清空默认段
+            for p in list(cell.paragraphs):
+                p.clear()
+
+            if idx == 0:
+                p = cell.paragraphs[0]
+                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                _set_paragraph_spacing(p, before_pt=0, after_pt=0, line_pt=self.line_pt)
+                _disable_snap_to_grid(p)
+                run = p.add_run(title)
+                _set_run_font(run, name=face, size_pt=U.PT_3)
+            elif idx == 2:
+                # 扁长方空框：0.5pt 实线；框内无字
+                for old in tcPr.findall(qn("w:tcBorders")):
+                    tcPr.remove(old)
+                tcBorders = OxmlElement("w:tcBorders")
+                sz = str(int(round(U.ORDER_SEAL_BORDER_PT * 8)))
+                for edge in ("top", "left", "bottom", "right"):
+                    el = OxmlElement(f"w:{edge}")
+                    el.set(qn("w:val"), "single")
+                    el.set(qn("w:sz"), sz)
+                    el.set(qn("w:space"), "0")
+                    el.set(qn("w:color"), "000000")
+                    tcBorders.append(el)
+                tcPr.append(tcBorders)
+                p = cell.paragraphs[0]
+                _set_paragraph_spacing(p, before_pt=0, after_pt=0, line_pt=1.0)
+                _disable_snap_to_grid(p)
+                _set_run_font(p.add_run(""), name=face, size_pt=0.5)
+
+    def _write_order_signers_date_note(self, doc: Document, ir: LayoutIR) -> None:
+        """正文/附件说明下空 2 行 → 职务+章（联合组间空 1）→ 章下空 1 → 日期 → 附注同行下。"""
+        titles = [s.strip() for s in (ir.signers or []) if str(s).strip()]
+        if not titles:
+            return
+
+        _empty_grid_lines(doc, 2, self.line_pt)
+        for i, title in enumerate(titles):
+            if i > 0:
+                _empty_grid_lines(doc, 1, self.line_pt)
+            self._write_order_signer_row(doc, title)
+
+        # 成文日期：章下缘再空 1 行、右空四字（表高即章高，其后空 1 行）
+        if ir.date.strip():
+            _empty_grid_lines(doc, 1, self.line_pt)
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            _set_paragraph_spacing(p, line_pt=self.line_pt)
+            _disable_snap_to_grid(p)
+            p.paragraph_format.right_indent = Pt(U.PT_3 * 4)
+            run = p.add_run(ir.date.strip())
+            _set_run_font(run, name=self.fonts["fangsong"], size_pt=U.PT_3)
+            if ir.note.strip():
+                self._write_note(doc, ir)
+        elif ir.note.strip():
+            self._write_note(doc, ir)
+
+    def _order_need_banji(self, ir: LayoutIR) -> bool:
+        if ir.cc_recipients.strip():
+            return True
+        if ir.print_org.strip() or ir.print_date.strip():
+            return True
+        # 公布令一般无主送；若用户强制进版记则也出
+        if ir.recipient.strip() and ir.recipients_in_footer:
+            return True
+        return False
+
+    def _write_order_banji(self, doc: Document, ir: LayoutIR) -> None:
+        if not self._order_need_banji(ir):
+            return
         self._write_banji(doc, ir, require_print=False, pin_bottom=True)
         sp = doc.add_paragraph()
         _set_paragraph_spacing(sp, before_pt=0, after_pt=0, line_pt=1.0)

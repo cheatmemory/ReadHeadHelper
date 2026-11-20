@@ -9,6 +9,7 @@ from pathlib import Path
 
 from core.body_structure.extract import extract_body_paragraphs, extract_body_with_trace
 from core.ir.minutes import format_issue_no, looks_like_minutes, normalize_name_list
+from core.ir.order import looks_like_order
 from core.ir.schema import ModelOutput
 from core.recognize.review import review_and_correct
 from core.recognize.trace import build_field_trace
@@ -114,6 +115,16 @@ class OnnxFieldRecognizer:
 
     def recognize(self, text: str, *, with_trace: bool = False) -> ModelOutput:
         text = text or ""
+        # 命令：ONNX 尚不可靠 → 走正则（日后可换 SDK_SCHEMA_ORDER）
+        if looks_like_order(source_text=text):
+            from core.recognize.order_regex import recognize_order
+
+            model = recognize_order(text)
+            self._last_sdk_result = None
+            self._last_field_trace = None
+            self._last_body_trace = None
+            return model
+
         as_minutes = looks_like_minutes(source_text=text)
         schema = SDK_SCHEMA_MINUTES if as_minutes else SDK_SCHEMA
 

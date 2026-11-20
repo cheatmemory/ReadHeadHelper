@@ -15,6 +15,7 @@ class SealMode(str, Enum):
 class DocKind(str, Enum):
     GENERAL = "general"
     MINUTES = "minutes"
+    ORDER = "order"
 
 
 @dataclass
@@ -175,6 +176,9 @@ class LayoutIR:
     liexi: str = ""
     attendance_absent_confirmed: bool = False
 
+    # 命令（令）扩展：令号；signers 存职务（不含姓名）
+    order_no: str = ""
+
     # 选填确认（字段名 → 是否确认无此项）
     absent_flags: dict[str, bool] = field(default_factory=dict)
 
@@ -186,6 +190,9 @@ class LayoutIR:
     def is_minutes(self) -> bool:
         return self.doc_kind == DocKind.MINUTES
 
+    def is_order(self) -> bool:
+        return self.doc_kind == DocKind.ORDER
+
     def missing_required(self) -> list[str]:
         if self.is_minutes():
             missing: list[str] = []
@@ -195,6 +202,30 @@ class LayoutIR:
                 missing.append("正文")
             if not self.attendance.strip() and not self.attendance_absent_confirmed:
                 missing.append("出席名单")
+            return missing
+
+        if self.is_order():
+            from core.ir.order import format_order_no, mark_is_order
+
+            missing = []
+            mark = self.primary_org_mark().strip()
+            if not mark or not mark_is_order(mark):
+                missing.append("发文机关标志")
+            if not format_order_no(self.order_no):
+                missing.append("令号")
+            if not any(b.text.strip() for b in self.body_tree):
+                missing.append("正文")
+            titles = [s.strip() for s in (self.signers or []) if str(s).strip()]
+            if not titles:
+                missing.append("签发人职务")
+            if not self.date.strip():
+                missing.append("成文日期")
+            # 印发同进同退
+            po, pd = self.print_org.strip(), self.print_date.strip()
+            if po and not pd:
+                missing.append("印发日期")
+            if pd and not po:
+                missing.append("印发机关")
             return missing
 
         missing = []

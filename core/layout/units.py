@@ -35,6 +35,12 @@ PAGE = {
 
 # 红头上边缘距版心上边缘 35mm → 距纸顶 ≈ 37+35 = 72mm
 RED_HEADER_FROM_BODY_TOP_MM = 35.0
+# 命令（令）标志墨迹顶距版心上边缘 20mm → 距纸顶 57mm（docs/baselines/命令.md §3.1）
+ORDER_MARK_FROM_BODY_TOP_MM = 20.0
+# 签名章占位：扁长方 45×20 mm（高须 ≤ 空二行 ≈ 20.5 mm）
+ORDER_SEAL_WIDTH_MM = 45.0
+ORDER_SEAL_HEIGHT_MM = 20.0
+ORDER_SEAL_BORDER_PT = 0.5
 # 红头行框内：字身上方空白占 (line_pt - font_pt) 的比例（Word/WPS 非居中）
 # 垫高时扣掉这段，使「红色墨迹顶」而非行框顶落在 35mm
 RED_HEADER_INK_ABOVE_RATIO = 0.59

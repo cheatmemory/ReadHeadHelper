@@ -19,6 +19,7 @@ from core.body_structure.parser import renumber_blocks
 from core.config_loader import load_config, project_root
 from core.ir.builder import split_names
 from core.ir.minutes import format_issue_no, normalize_name_list
+from core.ir.order import format_order_no, normalize_order_signers
 from core.ir.schema import AttachmentDocx, BodyBlock, DocKind, LayoutIR, ModelOutput, SealMode
 from core.layout import DocxEngine
 from core.layout.office_preview import render_docx_preview
@@ -73,6 +74,7 @@ class BackendBridge(QObject):
                 "org_mark": "、".join(ir.org_marks),
                 "doc_number": ir.doc_number,
                 "issue_no": format_issue_no(ir.issue_no) or ir.issue_no,
+                "order_no": format_order_no(ir.order_no) or ir.order_no,
                 "title": ir.title,
                 "recipient": ir.recipient,
                 "attachment_caption": ir.attachment_caption,
@@ -302,6 +304,10 @@ class BackendBridge(QObject):
                 from core.ir.minutes import minutes_export_basename
 
                 default_name = minutes_export_basename(ir)
+            elif ir.is_order():
+                from core.ir.order import order_export_basename
+
+                default_name = order_export_basename(ir)
             else:
                 default_name = (ir.doc_number or "导出公文").replace("/", "-") + ".docx"
             out_dir = project_root() / "examples" / "out"
@@ -341,7 +347,7 @@ class BackendBridge(QObject):
             ir.doc_kind = DocKind(kind)
         except ValueError:
             ir.doc_kind = DocKind.GENERAL
-        if ir.is_minutes():
+        if ir.is_minutes() or ir.is_order():
             ir.seal_mode = None
         else:
             ir.seal_mode = SealMode(seal) if seal else None
@@ -441,19 +447,34 @@ class BackendBridge(QObject):
 
         ir.copy_number = str(fields.get("copy_number") or "").strip()
         ir.urgency = str(fields.get("urgency") or "").strip()
-        ir.signers = split_names(str(fields.get("issuer_sign") or ""))
         org_raw = str(fields.get("org_mark") or "").strip()
-        # 纪要标志通常整串含顿号机关名，勿按顿号拆成多标志
-        if ir.is_minutes():
+        # 纪要/命令标志通常整串，勿按顿号拆成多标志
+        if ir.is_minutes() or ir.is_order():
             ir.org_marks = [org_raw] if org_raw else []
         else:
             ir.org_marks = split_names(org_raw)
-        ir.doc_number = str(fields.get("doc_number") or "").strip()
+        if ir.is_order():
+            # 命令：issuer_sign / signer_titles 均为职务
+            titles_raw = fields.get("signer_titles")
+            if titles_raw is None:
+                titles_raw = fields.get("issuer_sign") or ""
+            if isinstance(titles_raw, list):
+                ir.signers = normalize_order_signers(titles_raw)
+            else:
+                ir.signers = normalize_order_signers(str(titles_raw))
+            ir.doc_number = ""
+            ir.order_no = format_order_no(str(fields.get("order_no") or ""))
+            ir.title = ""
+            ir.org_signature = ""
+        else:
+            ir.signers = split_names(str(fields.get("issuer_sign") or ""))
+            ir.doc_number = str(fields.get("doc_number") or "").strip()
+            ir.order_no = ""
+            ir.title = str(fields.get("title") or "").strip()
+            ir.org_signature = str(fields.get("org_signature") or "").strip()
         ir.issue_no = format_issue_no(str(fields.get("issue_no") or ""))
-        ir.title = str(fields.get("title") or "").strip()
         ir.recipient = str(fields.get("recipient") or "").strip()
         ir.attachment_caption = str(fields.get("attachment_caption") or "").strip()
-        ir.org_signature = str(fields.get("org_signature") or "").strip()
         ir.date = str(fields.get("date") or "").strip()
         ir.note = str(fields.get("note") or "").strip()
         ir.cc_recipients = str(fields.get("cc_recipients") or "").strip()
@@ -468,12 +489,12 @@ class BackendBridge(QObject):
             or (data.get("absent_flags") or {}).get("attendance")
         )
         ir.recipients_in_footer = bool(fields.get("recipients_in_footer"))
-        if ir.is_minutes() and ir.recipient.strip():
+        if (ir.is_minutes() or ir.is_order()) and ir.recipient.strip():
             ir.recipients_in_footer = True
         ir.absent_flags = dict(data.get("absent_flags") or {})
 
         seal = data.get("seal_mode")
-        if ir.is_minutes():
+        if ir.is_minutes() or ir.is_order():
             ir.seal_mode = None
         else:
             ir.seal_mode = SealMode(seal) if seal else None

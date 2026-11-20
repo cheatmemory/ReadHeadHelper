@@ -152,11 +152,12 @@ class ConfirmPage(QWidget):
     def load_from_session(self):
         ir = self.session.ir
         minutes = ir.is_minutes()
-        # 纪要无发文字号 / 发文机关署名
+        order = ir.is_order()
+        # 纪要/命令无发文字号 / 发文机关署名
         if hasattr(self, "_doc_number_box"):
-            self._doc_number_box.setVisible(not minutes)
+            self._doc_number_box.setVisible(not minutes and not order)
         if hasattr(self, "_org_signature_box"):
-            self._org_signature_box.setVisible(not minutes)
+            self._org_signature_box.setVisible(not minutes and not order)
         org_label = "纪要标志 *" if minutes else "发文机关标志 *"
         # 更新机关标志旁标签文案
         org_edit = self.fields.get("org_mark")
@@ -173,11 +174,11 @@ class ConfirmPage(QWidget):
             "urgency": ir.urgency,
             "issuer_sign": "、".join(ir.signers),
             "org_mark": "、".join(ir.org_marks),
-            "doc_number": "" if minutes else ir.doc_number,
-            "title": ir.title,
+            "doc_number": "" if (minutes or order) else ir.doc_number,
+            "title": "" if order else ir.title,
             "recipient": ir.recipient,
             "attachment_caption": ir.attachment_caption,
-            "org_signature": "" if minutes else ir.org_signature,
+            "org_signature": "" if (minutes or order) else ir.org_signature,
             "date": ir.date,
             "note": ir.note,
             "cc_recipients": ir.cc_recipients,
@@ -195,7 +196,7 @@ class ConfirmPage(QWidget):
             if k in self.none_btns and not v.strip():
                 self.none_btns[k].setChecked(True)
                 self._toggle_none(k, True)
-        if minutes:
+        if minutes or order:
             ir.seal_mode = None
             self.alert.hide()
             for btn in self.seal_btns.values():
@@ -214,21 +215,30 @@ class ConfirmPage(QWidget):
         ir = self.session.ir
         get = self._val
         minutes = ir.is_minutes()
+        order = ir.is_order()
         secret = get("secret_combo")
         if "★" in secret:
             a, b = secret.split("★", 1)
             ir.secret_level, ir.secret_period = a.strip(), b.strip()
         else:
             ir.secret_level, ir.secret_period = secret, ""
-        ir.copy_number = get("copy_number")
-        ir.urgency = get("urgency")
+        ir.copy_number = "" if order else get("copy_number")
+        ir.urgency = "" if order else get("urgency")
         ir.signers = split_names(get("issuer_sign"))
         ir.org_marks = split_names(get("org_mark"))
-        ir.doc_number = "" if minutes else get("doc_number")
-        ir.title = get("title")
+        ir.doc_number = "" if (minutes or order) else get("doc_number")
+        ir.title = "" if order else get("title")
         ir.recipient = get("recipient")
         ir.attachment_caption = get("attachment_caption")
-        ir.org_signature = "" if minutes else get("org_signature")
+        ir.org_signature = "" if (minutes or order) else get("org_signature")
+        if order:
+            from core.ir.order import format_order_no, normalize_order_signers
+
+            ir.seal_mode = None
+            ir.signers = normalize_order_signers(ir.signers)
+            # Qt 页暂无独立令号框时，从字号槽兼容
+            if not ir.order_no.strip():
+                ir.order_no = format_order_no(get("doc_number"))
         ir.date = get("date")
         ir.note = get("note")
         ir.cc_recipients = get("cc_recipients")

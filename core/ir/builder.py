@@ -7,6 +7,7 @@ from typing import Iterable
 
 from core.body_structure.parser import parse_body_blocks
 from core.ir.minutes import apply_minutes_to_ir
+from core.ir.order import apply_order_to_ir, looks_like_order
 from core.ir.schema import DocKind, LayoutIR, ModelOutput, SealMode
 
 
@@ -83,6 +84,11 @@ def model_to_partial_ir(model: ModelOutput, source_text: str = "") -> LayoutIR:
         org_marks=org_marks,
         body_tree=parse_body_blocks(body_paras),
     )
+    # 命令优先：标志以命令/令结尾，或正则识别器已挂 _is_order
+    if looks_like_order(org_marks=org_marks, source_text=source_text) or getattr(
+        model, "_is_order", False
+    ):
+        return apply_order_to_ir(ir, source_text=source_text, model=model)
     return apply_minutes_to_ir(ir, source_text=source_text, model=model)
 
 
@@ -102,8 +108,8 @@ def build_layout_ir(
     ir = model_to_partial_ir(model, source_text=source_text)
     if isinstance(seal_mode, str):
         seal_mode = SealMode(seal_mode) if seal_mode else None
-    # 纪要不校验、不写入 seal_mode
-    if ir.is_minutes():
+    # 纪要/命令不校验、不写入 seal_mode
+    if ir.is_minutes() or ir.is_order():
         ir.seal_mode = None
     else:
         ir.seal_mode = seal_mode
@@ -123,6 +129,6 @@ def build_layout_ir(
                 setattr(ir, k, v)
             if k == "doc_kind" and v:
                 ir.doc_kind = DocKind(v) if not isinstance(v, DocKind) else v
-                if ir.is_minutes():
+                if ir.is_minutes() or ir.is_order():
                     ir.seal_mode = None
     return ir
