@@ -346,9 +346,10 @@ def fill_date(result, lines, a):
 
 
 def fill_sig(result, lines, a):
-    """署名：成文日期行之前最近的机关名样式行；支持断行（短片段行+前行合并）。"""
-    if result.get("发文机关署名"):
-        return result
+    """署名：成文日期前连续机关行（联合行文多行）；支持断行短片段合并。
+
+    模型有残缺单条时，若正则收齐更多机关行则覆盖。
+    """
     date_idx = None
     for k in range(len(lines)):
         i, raw, nl = lines[k]
@@ -369,27 +370,98 @@ def fill_sig(result, lines, a):
                 break
     if date_idx is None:
         return result
+
+    collected = []
+    skip_prev = False
     for k in range(len(lines) - 1, -1, -1):
         i, raw, nl = lines[k]
         if i >= date_idx or _is_noise(nl) or not nl:
             continue
+        if skip_prev:
+            skip_prev = False
+            continue
         if SIG_RE.match(nl) and "关于" not in nl and len(nl) <= 30:
-            # 断行署名：本行是短片段（如"运输局"），前行也是机关名片段 → 合并
+            # 断行署名：本行是短片段（如"运输局"），前行也是机关名片段 → 合并为一行
             if (len(nl) <= 5 and k > 0
                     and re.fullmatch(r"[\u4e00-\u9fa5]{2,15}", _n(lines[k - 1][1]))):
-                result["发文机关署名"] = [{"text": lines[k - 1][1].strip() + "\n" + raw.strip(),
-                                           "prob": 1.0, "source": "regex"}]
+                collected.append(lines[k - 1][1].strip() + raw.strip())
+                skip_prev = True
             else:
-                result["发文机关署名"] = [{"text": raw.strip(), "prob": 1.0, "source": "regex"}]
-            return result
+                collected.append(raw.strip())
+            continue
         # 断行署名：紧邻日期的是短片段行，其前一行才是完整机关样式 → 合并
         if (nl and len(nl) <= 8 and k > 0
                 and SIG_RE.match(_n(lines[k - 1][1]))
                 and "关于" not in _n(lines[k - 1][1])):
-            result["发文机关署名"] = [{"text": lines[k - 1][1].strip() + "\n" + raw.strip(),
-                                       "prob": 1.0, "source": "regex"}]
-            return result
-        break  # 紧邻日期前一行不是机关样式：不越界继续找，避免误抓正文
+            collected.append(lines[k - 1][1].strip() + raw.strip())
+            skip_prev = True
+            continue
+        break  # 连续机关行中断，不再越界抓正文
+
+    if not collected:
+        return result
+    collected.reverse()
+    body = "\n".join(collected)
+    cur = result.get("发文机关署名") or []
+    cur_flat = _flat("".join(_flat(x.get("text", "")) for x in cur))
+    body_flat = _flat(body)
+    # 空、或正则更长/含更多机关行 → 采用正则
+    if (not cur_flat
+            or body_flat == cur_flat
+            or (body_flat != cur_flat and len(body_flat) >= len(cur_flat))):
+        if not cur_flat or body_flat != cur_flat:
+            result["发文机关署名"] = [{"text": body, "prob": 1.0, "source": "regex"}]
+    return result
+
+
+def _org_names_from_block(text):
+    """从标志/署名文本拆机关名；独立「文件/函」行丢弃，行尾「文件」剥掉。"""
+    names = []
+    for ln in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        s = _n(ln)
+        if not s or s in ("文件", "函"):
+            continue
+        if s.endswith("文件") and len(s) > 2:
+            s = s[:-2].strip()
+        if s:
+            names.append(s)
+    return names
+
+
+def link_mark_and_sig(result, text):
+    """联合行文：发文机关标志 ↔ 发文机关署名互相补齐。
+
+    - 标志已拆出 ≥2 家、署名更少 → 用标志机关写署名
+    - 署名 ≥2 家、标志粘成一家或家数不足 → 用署名重建「机关行 + 文件」
+    """
+    marks = result.get("发文机关标志") or []
+    sigs = result.get("发文机关署名") or []
+    mark_text = marks[0].get("text", "") if marks else ""
+    sig_text = "\n".join(
+        str(x.get("text") or "").strip() for x in sigs if str(x.get("text") or "").strip()
+    )
+    mark_orgs = _org_names_from_block(mark_text)
+    sig_orgs = _org_names_from_block(sig_text)
+
+    # 标志多行、署名残缺
+    if len(mark_orgs) >= 2 and len(sig_orgs) < len(mark_orgs):
+        result["发文机关署名"] = [{
+            "text": "\n".join(mark_orgs), "prob": 1.0, "source": "link"
+        }]
+        sig_orgs = list(mark_orgs)
+
+    # 署名多家、标志家数不够或无换行粘连
+    if len(sig_orgs) >= 2 and len(mark_orgs) < len(sig_orgs):
+        flat_m = _flat(mark_text).replace("文件", "").replace("函", "")
+        flat_s = "".join(sig_orgs)
+        if (not mark_orgs
+                or flat_m == flat_s
+                or (flat_m and (flat_s in flat_m or flat_m in flat_s))):
+            result["发文机关标志"] = [{
+                "text": "\n".join(sig_orgs) + "\n文件",
+                "prob": 1.0,
+                "source": "link",
+            }]
     return result
 
 
@@ -486,6 +558,88 @@ ATT_STOP_RE = re.compile(
 )
 # 附件/抄送污染：条目内夹带名单或抄送标签
 POLLUTED_RE = re.compile(r"出席\s*[：:]|请假\s*[：:]|列席\s*[：:]|抄送\s*[：:]")
+# 正文指代「见附件 / 详见附件」，不是附件说明标题
+SEE_ATTACH_RE = re.compile(r"见\s*附件|详见\s*附件")
+
+
+def _attachment_block_ranges(text, result=None):
+    """「附件：」版式块的字符区间 [(start, end), ...]，用于剔除正文误抽。
+
+    含成文日期之后的附件行；每块至少覆盖「附件：」起始行。
+    """
+    lines = (text or "").split("\n")
+    line_starts = []
+    pos = 0
+    for i, ln in enumerate(lines):
+        line_starts.append(pos)
+        pos += len(ln) + (1 if i < len(lines) - 1 else 0)
+    text_len = len(text or "")
+
+    ranges = []
+    i = 0
+    while i < len(lines):
+        if not ATT_HEAD_RE.match(_n(lines[i])):
+            i += 1
+            continue
+        # 起始行必收；续行收到停止词/署名/日期/空行/下一块附件
+        j = i + 1
+        while j < len(lines):
+            nl = _n(lines[j])
+            if ATT_STOP_RE.match(nl):
+                break
+            if DATE_LINE_RE.match(nl) and not PRINT_RE.match(nl):
+                break
+            if ATT_HEAD_RE.match(nl):
+                break
+            if ("关于" not in nl and len(nl) <= 30
+                    and (SIG_RE.match(nl)
+                         or (j + 1 < len(lines) and len(nl) <= 8
+                             and SIG_RE.match(nl + _n(lines[j + 1]))))):
+                break
+            if not lines[j].strip():
+                nk = j + 1
+                while nk < len(lines) and not lines[nk].strip():
+                    nk += 1
+                if nk < len(lines) and ATT_ITEM_RE.match(_n(lines[nk])):
+                    j = nk
+                    continue
+                break
+            j += 1
+        start = line_starts[i]
+        end = line_starts[j] if j < len(lines) else text_len
+        if end > start:
+            ranges.append((start, end))
+        i = j if j > i else i + 1
+    return ranges
+
+
+def _is_see_attachment_ref(text, start, end):
+    """span 落在「具体标准见附件」这类正文指代里。"""
+    if start is None or end is None:
+        return False
+    win = (text or "")[max(0, start - 2): min(len(text or ""), end + 6)]
+    return bool(SEE_ATTACH_RE.search(win.replace("\n", "")))
+
+
+def filter_attachment_captions(result, text):
+    """丢掉正文「见附件」误抽；有「附件：」块时只保留块内 span。"""
+    items = result.get("附件说明")
+    if not items:
+        return result
+    ranges = _attachment_block_ranges(text, result)
+    kept = []
+    for x in items:
+        st, en = x.get("start"), x.get("end")
+        if st is None or en is None:
+            kept.append(x)
+            continue
+        if _is_see_attachment_ref(text, st, en):
+            continue
+        if ranges and not any(st >= a and en <= b for a, b in ranges):
+            continue
+        kept.append(x)
+    result["附件说明"] = kept
+    return result
 
 
 def fill_attachment_caption(result, text):
@@ -951,16 +1105,39 @@ def validate(result, text):
             kept = [x for x in result["发文字号"] if x.get("start", 0) < tstart]
             if kept:
                 result["发文字号"] = kept
+    # 发文机关标志：逐条剔除标题之后的 span（落款误抽）；保留版头块
+    tt, mks = result.get("标题"), result.get("发文机关标志")
+    if mks and tt:
+        ts_ = tt[0].get("start")
+        if ts_ is not None:
+            kept = [
+                x for x in mks
+                if x.get("start") is None or x.get("start") < ts_
+            ]
+            if not kept:
+                del result["发文机关标志"]
+                mks = None
+            elif len(kept) != len(mks):
+                preferred = [
+                    x for x in kept
+                    if "\n" in str(x.get("text") or "")
+                    or "文件" in _flat(x.get("text", ""))
+                ]
+                best = max(
+                    preferred or kept,
+                    key=lambda x: len(_flat(x.get("text", ""))),
+                )
+                result["发文机关标志"] = [best]
+                mks = result["发文机关标志"]
+            else:
+                result["发文机关标志"] = kept
+                mks = kept
     # 标题与标志同字、但全文只出现一处 => 模型把版头当标题，删掉
     tt, mks = result.get("标题"), result.get("发文机关标志")
     if tt and mks:
         t0, m0 = _flat(tt[0]["text"]), _flat(mks[0]["text"])
         if t0 and t0 == m0 and text.count(t0) < 2:
             del result["标题"]
-        # 发文机关标志必须在标题之前；晚于标题的是署名或正文里的机关名误抽
-        ts_, ms_ = tt[0].get("start"), mks[0].get("start")
-        if ts_ is not None and ms_ is not None and ms_ > ts_:
-            del result["发文机关标志"]
     return result
 
 
@@ -987,6 +1164,7 @@ def postprocess(result, text):
     result = fill_docid(result, lines, a)
     result = fill_main(result, lines, a)
     result = fill_attachment_caption(result, text)
+    result = filter_attachment_captions(result, text)  # 剔除正文「见附件」误抽
     result = fill_date(result, lines, a)
     # 纪要：落款日期是印发行之前最后一条独立日期行，模型常抓正文里的日期
     mi2, ti2 = _minutes_anchors(lines)
@@ -1015,6 +1193,7 @@ def postprocess(result, text):
     result = repair_attend(result, text)
     result = fill_attend_lines(result, text)  # v5.1：名单整行兜底，优先于残缺模型值
     result = repair_signer(result, text)
+    result = link_mark_and_sig(result, text)  # 联合行文：标志 ↔ 署名互相补齐
     # 附件说明：一行里用顿号列多个附件 => 拆成多条（每段 >= 6 字才拆，避免误拆机关名）
     atts = result.get("附件说明")
     if atts:

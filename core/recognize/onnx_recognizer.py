@@ -46,9 +46,26 @@ def _join_name_field(result: dict, key: str) -> str:
 
 
 def _join_org_signature(result: dict) -> str:
-    """发文机关署名：多机关用换行保留顺序。"""
-    parts = _all_texts(result, "发文机关署名")
+    """发文机关署名：多机关用换行保留顺序（条目内换行也保留，供联合落款）。"""
+    parts: list[str] = []
+    for it in result.get("发文机关署名") or []:
+        t = str(it.get("text") or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not t:
+            continue
+        lines = [ln.strip() for ln in t.split("\n") if ln.strip()]
+        if lines:
+            parts.append("\n".join(lines))
     return "\n".join(parts)
+
+
+def _org_mark_field(result: dict) -> str:
+    """发文机关标志：保留换行，供联合红头按行拆机关；不去掉 \\n。"""
+    items = result.get("发文机关标志") or []
+    if not items:
+        return ""
+    t = str(items[0].get("text") or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    lines = [ln.strip() for ln in t.split("\n") if ln.strip()]
+    return "\n".join(lines)
 
 
 def _join_cc_field(result: dict) -> str:
@@ -147,7 +164,7 @@ class OnnxFieldRecognizer:
         as_order = kind == dk.KIND_ORDER
         as_letter = kind == dk.KIND_LETTER
 
-        org_mark = _first(final, "发文机关标志")
+        org_mark = _org_mark_field(final)
         title = "" if as_order else _first(final, "标题")
         # 抽取后二次确认纪要（标志/标题），避免仅靠文首判定漏切
         if not as_order and not as_letter:

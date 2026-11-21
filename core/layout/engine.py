@@ -1948,8 +1948,8 @@ class DocxEngine:
 
         ≤3 个：强制每行一个。≥4 个：同行两个仅当整行（含两机关名）测宽装得下。
         """
-        pad = 1.10  # 相对 Word/WPS 实测多留余量，避免格内再折行
-        # 任一单名本身超宽 → 此字号不可用
+        pad = 1.15  # 相对测宽多留余量，避免格内再折行
+        # 任一单名本身超宽 → 此字号不可用（单名绝不拆字）
         for name in marks:
             if layout_text_width_pt(name, mark_face, size_pt) * pad > max_width_pt:
                 return None
@@ -1969,17 +1969,24 @@ class DocxEngine:
         return rows
 
     def _plan_joint_header(self, marks: list[str], mark_face: str) -> dict:
-        """选定联合红头字号、行内容与列宽（供垫高计算与写表共用）。"""
+        """选定联合红头字号、行内容与列宽（供垫高计算与写表共用）。
+
+        所有机关行共用同一字号；单名绝不拆字。大字号测宽不可靠时向下收敛，
+        必要时可低于 3 号，避免最长机关名在格内折行。
+        """
         body_w = U.mm_to_twips(U.PAGE["body_width_mm"])
         body_pt = _body_width_pt()
-        pad = 1.10
+        pad = 1.15
 
         size_pt = float(U.PT_3)
         rows = list(marks)
         file_w = int(round(size_pt * 2.2 * 20))
         names_w = body_w - file_w
 
-        for trial in [x * 0.5 for x in range(int(U.PT_MARK_DEFAULT * 2), int(U.PT_3 * 2) - 1, -1)]:
+        # 从默认红头字号降到约 10pt；优先更少行（≥4 时可并排），同行数取更大字号
+        min_pt = 10.0
+        best: tuple | None = None  # (n_rows, -size_pt, size, rows, nw, fw)
+        for trial in [x * 0.5 for x in range(int(U.PT_MARK_DEFAULT * 2), int(min_pt * 2) - 1, -1)]:
             file_pt = layout_text_width_pt("文件", mark_face, trial) * pad
             gap_pt = trial * 0.35  # 名称块与「文件」之间留约 1/3 字缝
             file_need_pt = file_pt + gap_pt
@@ -1992,15 +1999,20 @@ class DocxEngine:
             content_pt = max(
                 layout_text_width_pt(line, mark_face, trial) for line in packed
             ) * pad
-            names_pt = min(max_names_pt, max(content_pt, trial * 2))
+            # 左列至少容纳最长一行，避免 Word 再折
+            names_pt = max(content_pt, trial * 2)
+            if names_pt > max_names_pt:
+                continue
             fw = max(1, int(round(file_need_pt * 20)))
             nw = max(1, int(round(names_pt * 20)))
             if nw + fw > body_w:
                 nw = body_w - fw
-            size_pt = float(trial)
-            file_w, names_w = fw, nw
-            rows = packed
-            break
+            cand = (len(packed), -float(trial), float(trial), packed, nw, fw)
+            if best is None or cand[:2] < best[:2]:
+                best = cand
+
+        if best is not None:
+            _, _, size_pt, rows, names_w, file_w = best
 
         return {
             "size_pt": size_pt,

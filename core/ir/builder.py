@@ -23,6 +23,38 @@ def split_names(raw: str) -> list[str]:
     return parts or ([raw] if raw else [])
 
 
+def split_org_marks(raw: str) -> list[str]:
+    """发文机关标志 → 联合红头机关列表。
+
+    保留换行拆分；独立「文件/函」行丢弃；行尾「文件」剥掉，避免第三家假机关。
+    """
+    raw = (raw or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return []
+    if "\n" in raw:
+        names: list[str] = []
+        for ln in raw.split("\n"):
+            s = ln.strip()
+            if not s or s in ("文件", "函"):
+                continue
+            if s.endswith("文件") and len(s) > 2:
+                s = s[: -len("文件")].rstrip()
+            if s:
+                names.append(s)
+        return names
+    # 单行：按顿号等拆；整行「…文件」去后缀
+    parts = split_names(raw)
+    out: list[str] = []
+    for p in parts:
+        if p in ("文件", "函"):
+            continue
+        if p.endswith("文件") and len(p) > 2:
+            p = p[: -len("文件")].rstrip()
+        if p:
+            out.append(p)
+    return out
+
+
 def model_to_partial_ir(model: ModelOutput, source_text: str = "") -> LayoutIR:
     """把模型 JSON 映射为可编辑的 LayoutIR（不含 seal_mode）。"""
     body_paras = list(model.main.body_blocks or [])
@@ -64,7 +96,7 @@ def model_to_partial_ir(model: ModelOutput, source_text: str = "") -> LayoutIR:
                 kept.append(s)
             body_paras = kept
 
-    org_marks = split_names(model.header.org_mark)
+    org_marks = split_org_marks(model.header.org_mark)
     signers = split_names(model.header.issuer_sign)
 
     ir = LayoutIR(

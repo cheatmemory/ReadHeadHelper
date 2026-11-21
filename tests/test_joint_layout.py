@@ -191,6 +191,34 @@ def test_joint_header_never_breaks_single_org_name(tmp_path: Path):
     assert right_tw < int(round(size_pt * 3.2 * 20))
 
 
+def test_joint_header_three_orgs_same_size_no_wrap(tmp_path: Path):
+    """三机关联合红头：每名一行不拆字，三行字号一致。"""
+    from core.layout.office_measure import office_measure_width_pt
+
+    office_measure_width_pt.cache_clear()
+    orgs = ["浙江省教育厅", "浙江省财政厅", "浙江省卫生健康委员会"]
+    ir = _base(
+        org_marks=orgs,
+        org_signature="\n".join(orgs),
+        doc_number="浙教基〔2026〕42号",
+        title="浙江省教育厅　浙江省财政厅　浙江省卫生健康委员会关于加强中小学教室照明改造工作的通知",
+        seal_mode=SealMode.STAMP,
+    )
+    out = tmp_path / "joint_zhejiang3.docx"
+    DocxEngine().render(ir, out)
+    doc = Document(str(out))
+    left = [p.text for p in doc.tables[0].rows[0].cells[0].paragraphs if p.text.strip()]
+    assert left == orgs
+    sizes = []
+    for p in doc.tables[0].rows[0].cells[0].paragraphs:
+        for r in p.runs:
+            if r.text.strip() and r.font.size is not None:
+                sizes.append(round(r.font.size.pt, 1))
+    assert sizes, "红头应有字号"
+    assert len(set(sizes)) == 1, sizes
+    assert sizes[0] <= U.PT_MARK_DEFAULT
+
+
 def test_sample3_header_rows_and_stamp_two_rows(tmp_path: Path):
     """样本3：5 机关红头 2+2+1；有章署名 3+2。"""
     orgs = [

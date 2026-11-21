@@ -69,7 +69,11 @@ def estimate_layout_width_pt(text: str, size_pt: float) -> float:
 
 @lru_cache(maxsize=256)
 def office_measure_width_pt(text: str, font_face: str, size_pt: float) -> float | None:
-    """Word/WPS 光标位移测宽（pt）。失败返回 None。"""
+    """Word/WPS 光标位移测宽（pt）。失败返回 None。
+
+    大字号时默认版心会折行，光标 Δx 只覆盖首行 → 宽度严重偏小。
+    测宽前加宽页、禁止折行，避免联合红头误选过大字号。
+    """
     t = (text or "").strip()
     if not t:
         return 0.0
@@ -82,6 +86,14 @@ def office_measure_width_pt(text: str, font_face: str, size_pt: float) -> float 
     try:
         doc = app.Documents.Add()
         doc.Content.Delete()
+        # 给足页宽，避免测宽文本在默认 A4 版心内折行
+        try:
+            sec = doc.Sections(1)
+            sec.PageSetup.PageWidth = float(size_pt) * max(len(t), 1) * 1.5 + 144.0  # pt
+            sec.PageSetup.LeftMargin = 36.0
+            sec.PageSetup.RightMargin = 36.0
+        except Exception:
+            pass
         doc.Range(0, 0).InsertAfter(t)
         rng = doc.Range(0, len(t))
         rng.Font.NameFarEast = font_face
@@ -90,6 +102,10 @@ def office_measure_width_pt(text: str, font_face: str, size_pt: float) -> float 
         except Exception:
             pass
         rng.Font.Size = float(size_pt)
+        try:
+            rng.ParagraphFormat.WordWrap = False
+        except Exception:
+            pass
         start = rng.Duplicate
         start.Collapse(1)  # wdCollapseStart
         end = rng.Duplicate
@@ -112,8 +128,12 @@ def office_measure_width_pt(text: str, font_face: str, size_pt: float) -> float 
 
 
 def layout_text_width_pt(text: str, font_face: str, size_pt: float) -> float:
-    """落款用宽度：优先 Word/WPS 实测，否则估算。"""
+    """排版宽度：优先 Word/WPS 实测；若明显小于汉字 1em 估算则取估算（防大字号折行测窄）。"""
+    estimated = estimate_layout_width_pt(text, size_pt)
     measured = office_measure_width_pt(text, font_face, size_pt)
-    if measured is not None:
-        return measured
-    return estimate_layout_width_pt(text, size_pt)
+    if measured is None:
+        return estimated
+    # 实测若小于估算的 75%，视为折行/测宽失败，改用估算
+    if estimated > 0 and measured < estimated * 0.75:
+        return estimated
+    return measured
