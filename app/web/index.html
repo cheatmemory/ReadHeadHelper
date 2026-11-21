@@ -538,15 +538,18 @@
     }
     .body-cut-trace .bct-preview {
       margin-top: 4px;
-      padding: 8px 10px;
+      padding: 10px 12px;
       border-radius: 8px;
       background: #fff;
       border: 1px solid #eef2f7;
-      color: #64748b;
-      font-size: 11px;
-      line-height: 1.5;
-      max-height: 4.5em;
-      overflow: hidden;
+      color: #475569;
+      font-size: 12px;
+      line-height: 1.55;
+      max-height: 14em;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      -webkit-overflow-scrolling: touch;
     }
     .field-head label {
       font-size: 13px; color: var(--ink-soft); font-weight: 600;
@@ -2168,7 +2171,7 @@
     let lastBodyTrace = null;
 
     const TRACE_INPUT_IDS = [
-      "f-org", "f-docno", "f-issue", "f-title", "f-orgsig", "f-date",
+      "f-org", "f-docno", "f-issue", "f-order", "f-order-titles", "f-title", "f-orgsig", "f-date",
       "f-print-org", "f-print-date", "f-signers", "f-to", "f-attach",
       "f-cc", "f-note", "f-secret", "f-urgency", "f-copy",
       "f-attendance", "f-leave", "f-liexi",
@@ -2297,8 +2300,19 @@
         `<div class="bct-row"><span class="bct-k">起点</span><span class="bct-v">${diag.start_label || diag.start_rule || "—"} <span style="color:#94a3b8">(${diag.start_rule || ""})</span></span></div>` +
         `<div class="bct-row"><span class="bct-k">终点</span><span class="bct-v">${diag.end_label || diag.end_rule || "—"} <span style="color:#94a3b8">(${diag.end_rule || ""})</span></span></div>` +
         (diag.preview
-          ? `<div class="bct-preview" title="裁切预览">${String(diag.preview).replace(/</g, "&lt;")}</div>`
+          ? `<div class="bct-preview" title="裁切预览">${escapeBodyCutPreview(diag.preview)}</div>`
           : "");
+    }
+
+    function escapeBodyCutPreview(raw) {
+      return String(raw || "")
+        .replace(/\r\n/g, "\n")
+        .replace(/\r/g, "\n")
+        .replace(/↵/g, "\n")
+        .replace(/\\n/g, "\n")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
     }
 
     function setFieldValue(id, value, preferNoneIfEmpty = true) {

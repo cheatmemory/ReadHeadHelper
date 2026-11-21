@@ -47,6 +47,11 @@ _URGENCY_LINE = re.compile(r"^(特提|特急|加急|平急)(?:文件)?$")
 _COPY_LINE = re.compile(r"^\d{6}$")
 _ISSUE_LINE = re.compile(r"^第\s*\d+\s*期$")
 _MARK_LINE = re.compile(r"^[\u4e00-\u9fa5A-Za-z0-9（）()\-·、]{2,40}纪要$")
+# 命令令号行（阿拉伯/中文数字）
+_ORDER_NO_LINE = re.compile(
+    r"^第\s*[0-9〇零一二三四五六七八九十百两]+\s*号\s*$"
+)
+_ORDER_MARK_TAIL = re.compile(r"(?:命令|令)$")
 
 
 def _flat(s: str) -> str:
@@ -379,7 +384,7 @@ def _resolve_char_window(
 
     # ---- start ----
     start: int | None = None
-    # 1) 模型偏移：主送 end > 标题 end
+    # 1) 模型偏移：主送 > 标题 > 令号（命令无主送/标题时用令号）
     cand_starts: list[tuple[int, int, str]] = []
     for sp in _items_to_spans(result, "主送机关"):
         if sp.end <= header_hi:
@@ -387,6 +392,9 @@ def _resolve_char_window(
     for sp in _items_to_spans(result, "标题"):
         if sp.end <= header_hi:
             cand_starts.append((1, sp.end, "标题"))
+    for sp in _items_to_spans(result, "令号"):
+        if sp.end <= header_hi:
+            cand_starts.append((2, sp.end, "令号"))
     if cand_starts:
         cand_starts.sort()
         # 模型主送 end 常不含冒号 → 正文会以单独「：」起头
@@ -419,6 +427,28 @@ def _resolve_char_window(
                 diag["start_rule"] = "anchor:标题"
                 diag["start_label"] = "文本锚点：标题之后"
 
+    # 2b) 命令：令号文本 / 独立「第N号」行之后
+    if start is None:
+        ono = _first_text(result, "令号").strip()
+        if ono:
+            hit = _find_substr(text, ono, lo=0, hi=header_hi)
+            if hit is not None:
+                start = _after_field(text, hit, len(ono))
+                diag["start_rule"] = "anchor:令号"
+                diag["start_label"] = "文本锚点：令号之后"
+        if start is None:
+            lines, line_spans = _build_line_index(text)
+            for i, ln in enumerate(lines[:20]):
+                if not _ORDER_NO_LINE.match((ln or "").strip()):
+                    continue
+                # 行尾之后（跳过换行）即为正文起点
+                start = line_spans[i][1]
+                while start < n and text[start] in "\r\n":
+                    start += 1
+                diag["start_rule"] = "anchor:令号行"
+                diag["start_label"] = "文本锚点：令号行之后"
+                break
+
     # 3) 启发式：文首「各…：」
     if start is None:
         m = _RECIP_TAIL.search(text[:header_hi])
@@ -428,9 +458,18 @@ def _resolve_char_window(
             diag["start_label"] = "启发式：文首「各…：」行末"
 
     if start is None:
-        start = min(20, max(0, n // 10))
-        diag["start_rule"] = "fallback:head_trim"
-        diag["start_label"] = "弱兜底：裁切文首一段"
+        # 命令味版头：宁可从标志后第一段起，也不要盲砍 20 字误伤正文
+        mark0 = _first_text(result, "发文机关标志").strip()
+        if _ORDER_MARK_TAIL.search(mark0):
+            hit = _find_substr(text, mark0, lo=0, hi=header_hi)
+            if hit is not None:
+                start = _after_field(text, hit, len(mark0))
+                diag["start_rule"] = "fallback:order_mark"
+                diag["start_label"] = "弱兜底：命令标志之后"
+        if start is None:
+            start = min(20, max(0, n // 10))
+            diag["start_rule"] = "fallback:head_trim"
+            diag["start_label"] = "弱兜底：裁切文首一段"
 
     start = max(0, min(start, n))
     start = _skip_colon_ws(text, start)
@@ -439,6 +478,8 @@ def _resolve_char_window(
     end_cands: list[tuple[int, str, str]] = []  # (pos, rule, label)
     for key in (
         "附件说明",
+        "签署职务",  # 命令：正文止于职务行前
+        "签署姓名",
         "发文机关署名",
         "成文日期",
         "附注",
@@ -458,6 +499,20 @@ def _resolve_char_window(
                 if not _is_standalone_date_at(text, sp.start, sp.end):
                     continue
             end_cands.append((sp.start, f"model:{key}.start", f"模型偏移：{key} 开始处"))
+
+    # 命令签署职务/姓名：模型漏偏移时，按整行文本锚点补
+    lines_all, line_spans_all = _build_line_index(text)
+    for key in ("签署职务", "签署姓名"):
+        needle = _first_text(result, key).strip()
+        if len(needle) < 2:
+            continue
+        for i, ln in enumerate(lines_all):
+            if (ln or "").strip() != needle:
+                continue
+            pos = line_spans_all[i][0]
+            if pos <= start:
+                continue
+            end_cands.append((pos, f"anchor:{key}", f"文本锚点：{key}"))
 
     for rx, rule, label in (
         (_ATTACH_ANY, "regex:附件", "正则：附件说明"),
@@ -537,19 +592,28 @@ def _resolve_char_window(
 
 
 def _merge_soft_wraps(filtered: list[str]) -> list[str]:
+    """合并 PDF/复制造成的假换行；结构小标题默认「行尾即结束」。
+
+    仅当结构行明显未写完（只剩序号、极短、或以连写虚字收尾）时，才与下行拼成回行续写。
+    「为」不再当作未完成标记，避免「三、禁止行为」被误拼正文。
+    """
+
     def _struct_complete(prev: str) -> bool:
         t = _norm_punct(prev.strip())
-        if t.endswith(("。", "；", ";", "！", "？")):
+        if t.endswith(("。", "；", ";", "！", "？", "：", ":")):
             return True
         rest = _STRUCT_START.sub("", t).strip()
         if not rest:
             return False
         if len(rest) <= 2:
             return False
-        if rest[-1] in "的各与和及为在对从被将把按依":
+        # 连写虚字：像「……的」「……和」——真回行续写；不含「为」（行为/认为等成词常见）
+        if rest[-1] in "的各与和及在对从被将把按依":
             return False
-        if len(t) <= 20:
+        # 短结构标题：独占一行即视为写完（回行=标题结束）
+        if len(t) <= 30:
             return True
+        # 过长又无句末：更像被硬折的长标题，交给合并
         return False
 
     paras: list[str] = []
@@ -564,7 +628,8 @@ def _merge_soft_wraps(filtered: list[str]) -> list[str]:
             paras.append(s)
             continue
         prev = paras[-1]
-        if _is_struct_line(prev) and _struct_complete(prev) and len(prev) <= 30:
+        # 结构行写完 → 下行另起（不再额外要求 len<=30，与 _struct_complete 一致）
+        if _is_struct_line(prev) and _struct_complete(prev):
             paras.append(s)
             continue
         if _is_struct_line(prev) and not _struct_complete(prev):
@@ -730,9 +795,10 @@ def _extract_body_impl(
     paras = _merge_soft_wraps(filtered)
     split_out = _split_inline_structures(paras)
 
-    preview = chunk.strip().replace("\n", "↵")
-    if len(preview) > 160:
-        preview = preview[:160] + "…"
+    # 保留换行供前端 pre-wrap 预览；过长时按字符截断并标省略
+    preview = chunk.strip()
+    if len(preview) > 800:
+        preview = preview[:800].rstrip() + "…"
     diag = {
         "start": c0,
         "end": c1,

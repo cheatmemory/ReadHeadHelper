@@ -414,6 +414,9 @@ class GovDocExtractor:
                     "probability": round(float(probs[i]), 6),
                 })
             offset += len(chunk)
+        # get_span 返回 set，遍历顺序是哈希序，与文中位置无关；
+        # 多值字段（出席、列席、请假、抄送、附件）必须按起点排序还原文档顺序
+        out.sort(key=lambda x: x["start"])
         return out
 
     def extract(self, text, schema):

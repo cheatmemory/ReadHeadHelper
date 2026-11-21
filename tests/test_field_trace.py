@@ -45,6 +45,29 @@ def test_build_field_trace_sources_and_confidence():
     assert att[1]["source"] == "postprocess" and att[1]["confidence"] is None
 
 
+def test_build_field_trace_order_fields():
+    """命令新字段：令号 / 签署职务 / 签署姓名 进开发者溯源。"""
+    final = {
+        "令号": [{"text": "第7号", "start": 12, "end": 15, "probability": 0.991}],
+        "签署职务": [
+            {"text": "区长", "start": 400, "end": 402, "probability": 0.95},
+            {"text": "市长", "start": 410, "end": 412, "probability": 0.94},
+        ],
+        "签署姓名": [{"text": "张三", "start": 403, "end": 405, "probability": 0.9}],
+    }
+    fields = build_field_trace(final)["fields"]
+    order = fields["f-order"]["spans"][0]
+    assert order["source"] == "model"
+    assert order["confidence"] == 0.991
+    assert order["text"] == "第7号"
+
+    titles = fields["f-order-titles"]["spans"]
+    assert len(titles) == 3  # 两职务 + 一姓名
+    assert titles[0]["field_cn"] == "签署职务" and titles[0]["confidence"] == 0.95
+    assert titles[1]["text"] == "市长"
+    assert any(sp["field_cn"] == "签署姓名" and sp["text"] == "张三" for sp in titles)
+
+
 def test_body_with_trace_reports_window():
     text = (
         "某某市人民政府文件\n"

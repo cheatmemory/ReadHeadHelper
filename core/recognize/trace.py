@@ -14,10 +14,13 @@ FIELD_UI_MAP: dict[str, str] = {
     "发文机关标志": "f-org",
     "发文字号": "f-docno",
     "期号": "f-issue",
+    "令号": "f-order",
     "标题": "f-title",
     "主送机关": "f-to",
     "附件说明": "f-attach",
     "发文机关署名": "f-orgsig",
+    "签署职务": "f-order-titles",
+    "签署姓名": "f-order-titles-name",  # 并入职务区展示（无独立输入框）
     "成文日期": "f-date",
     "附注": "f-note",
     "抄送机关": "f-cc",
@@ -37,7 +40,7 @@ SOURCE_LABELS = {
 }
 
 # 名单类：按 span 拆开展示
-MULTI_SPAN_FIELDS = {"出席", "请假", "列席", "附件说明", "签发人"}
+MULTI_SPAN_FIELDS = {"出席", "请假", "列席", "附件说明", "签发人", "签署职务", "签署姓名"}
 
 
 def _item_text(it: dict[str, Any] | None) -> str:
@@ -123,6 +126,23 @@ def build_field_trace(final_result: dict[str, Any] | None) -> dict[str, Any]:
             host = fields.setdefault(
                 "f-secret",
                 {"label": "密级/保密期限", "ui": "f-secret", "spans": []},
+            )
+            host["spans"].extend(spans)
+            continue
+        # 命令：签署姓名无独立框，挂到职务字段下展示置信度
+        if ui == "f-order-titles-name":
+            host = fields.setdefault(
+                "f-order-titles",
+                {"label": "签署职务/姓名", "ui": "f-order-titles", "spans": []},
+            )
+            for sp in spans:
+                sp["field_cn"] = "签署姓名"
+                host["spans"].append(sp)
+            continue
+        if ui == "f-order-titles":
+            host = fields.setdefault(
+                "f-order-titles",
+                {"label": "签署职务", "ui": "f-order-titles", "spans": []},
             )
             host["spans"].extend(spans)
             continue

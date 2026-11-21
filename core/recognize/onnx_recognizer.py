@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""OnnxFieldRecognizer：封装 govdoc-sdk，输出 §3 英文契约 ModelOutput。"""
+"""OnnxFieldRecognizer：封装 govdoc-sdk v5，输出 §3 英文契约 ModelOutput。"""
 from __future__ import annotations
 
 import copy
@@ -8,26 +8,11 @@ import sys
 from pathlib import Path
 
 from core.body_structure.extract import extract_body_paragraphs, extract_body_with_trace
-from core.ir.letter import looks_like_letter
 from core.ir.minutes import format_issue_no, looks_like_minutes, normalize_name_list
-from core.ir.order import looks_like_order
+from core.ir.order import format_order_no, normalize_order_signers
 from core.ir.schema import ModelOutput
 from core.recognize.review import review_and_correct
 from core.recognize.trace import build_field_trace
-
-# SDK 中文 schema（不可改名）——通用 16 字段（V4）
-SDK_SCHEMA = [
-    "份号", "密级", "保密期限", "紧急程度", "发文机关标志", "发文字号",
-    "标题", "主送机关", "附件说明", "发文机关署名", "成文日期",
-    "附注", "抄送机关", "印发机关", "印发日期", "签发人",
-]
-
-# 会议纪要 17 字段（V4）：无发文字号/签发人/发文机关署名，含期号与三类名单
-SDK_SCHEMA_MINUTES = [
-    "份号", "密级", "保密期限", "紧急程度", "发文机关标志", "期号",
-    "标题", "主送机关", "附件说明", "出席", "请假", "列席",
-    "成文日期", "附注", "抄送机关", "印发机关", "印发日期",
-]
 
 
 def _clean(v: str) -> str:
@@ -41,17 +26,29 @@ def _first(result: dict, key: str) -> str:
     return _clean(items[0].get("text", ""))
 
 
-def _join_name_field(result: dict, key: str) -> str:
-    """出席/请假/列席：合并多 span，顿号归一。"""
+def _all_texts(result: dict, key: str) -> list[str]:
+    """按模型返回顺序收集多值字段（不得去重）。"""
     items = result.get(key) or []
-    parts: list[str] = []
+    out: list[str] = []
     for it in items:
         t = _clean(str(it.get("text") or ""))
         if t:
-            parts.append(t)
+            out.append(t)
+    return out
+
+
+def _join_name_field(result: dict, key: str) -> str:
+    """出席/请假/列席：合并多 span，顿号归一。"""
+    parts = _all_texts(result, key)
     if not parts:
         return ""
     return normalize_name_list("、".join(parts))
+
+
+def _join_org_signature(result: dict) -> str:
+    """发文机关署名：多机关用换行保留顺序。"""
+    parts = _all_texts(result, "发文机关署名")
+    return "\n".join(parts)
 
 
 def _join_attachment_captions(result: dict) -> str:
@@ -96,14 +93,16 @@ class OnnxFieldRecognizer:
             raise FileNotFoundError(f"词表不存在: {self.vocab_path}")
 
         root = Path(sdk_root) if sdk_root else self.onnx_path.parent
-        # 允许 `from sdk.govdoc_sdk` 与 `from postprocess`
+        # 允许 `from sdk.govdoc_sdk` / `from postprocess` / `import doc_kind`
         root_s = str(root)
         if root_s not in sys.path:
             sys.path.insert(0, root_s)
 
         from sdk.govdoc_sdk import GovDocExtractor  # type: ignore
         from postprocess import postprocess  # type: ignore
+        import doc_kind  # type: ignore
 
+        self._doc_kind = doc_kind
         self._postprocess = postprocess
         self._extractor = GovDocExtractor(
             onnx_path=str(self.onnx_path),
@@ -113,50 +112,37 @@ class OnnxFieldRecognizer:
         self._last_sdk_result: dict | None = None
         self._last_field_trace: dict | None = None
         self._last_body_trace: dict | None = None
+        self._last_doc_kind: str | None = None
 
     def recognize(self, text: str, *, with_trace: bool = False) -> ModelOutput:
         text = text or ""
-        # 命令：ONNX 尚不可靠 → 走正则（日后可换 SDK_SCHEMA_ORDER）
-        if looks_like_order(source_text=text):
-            from core.recognize.order_regex import recognize_order
-
-            model = recognize_order(text)
-            self._last_sdk_result = None
-            self._last_field_trace = None
-            self._last_body_trace = None
-            return model
-
-        # 信函：ONNX 尚不可靠 → 走正则（判定见 baseline §1；勿与命令/纪要误抢）
-        if looks_like_letter(source_text=text):
-            from core.recognize.letter_regex import recognize_letter
-
-            model = recognize_letter(text)
-            self._last_sdk_result = None
-            self._last_field_trace = None
-            self._last_body_trace = None
-            return model
-
-        as_minutes = looks_like_minutes(source_text=text)
-        schema = SDK_SCHEMA_MINUTES if as_minutes else SDK_SCHEMA
+        dk = self._doc_kind
+        kind = dk.detect(text)
+        schema = dk.schema_for(kind)
+        self._last_doc_kind = kind
 
         model_raw = self._extractor.extract(text, schema)
         after_pp = self._postprocess(copy.deepcopy(model_raw), text)
-        # 纪要跳过 review；通用文走纠错
-        ran_review = not as_minutes
-        if ran_review:
+        # 仅通用文走应用侧 review；纪要/命令/信函只信 SDK postprocess
+        if kind == dk.KIND_GENERAL:
             final = review_and_correct(copy.deepcopy(after_pp), text)
         else:
             final = after_pp
         self._last_sdk_result = final
 
-        # 抽取后若标志/标题表明纪要，仍按纪要字段挂载
+        as_minutes = kind == dk.KIND_MINUTES
+        as_order = kind == dk.KIND_ORDER
+        as_letter = kind == dk.KIND_LETTER
+
         org_mark = _first(final, "发文机关标志")
-        title = _first(final, "标题")
-        as_minutes = as_minutes or looks_like_minutes(
-            org_marks=[org_mark] if org_mark else None,
-            title=title,
-            source_text=text,
-        )
+        title = "" if as_order else _first(final, "标题")
+        # 抽取后二次确认纪要（标志/标题），避免仅靠文首判定漏切
+        if not as_order and not as_letter:
+            as_minutes = as_minutes or looks_like_minutes(
+                org_marks=[org_mark] if org_mark else None,
+                title=title,
+                source_text=text,
+            )
 
         secret = _first(final, "密级")
         period = _first(final, "保密期限")
@@ -164,13 +150,18 @@ class OnnxFieldRecognizer:
             parts = secret.split("★", 1)
             secret, period = parts[0], parts[1] if len(parts) > 1 else period
 
+        recipient = "" if as_order else _first(final, "主送机关")
+        org_signature = ""
+        if not as_minutes and not as_order:
+            org_signature = _join_org_signature(final)
+
         if with_trace:
             body_blocks, body_diag = extract_body_with_trace(
                 text,
                 title=title,
-                recipient=_first(final, "主送机关"),
+                recipient=recipient,
                 date=_first(final, "成文日期"),
-                org_signature=_first(final, "发文机关署名"),
+                org_signature=org_signature,
                 org_mark=org_mark,
                 sdk_result=final,
             )
@@ -180,9 +171,9 @@ class OnnxFieldRecognizer:
             body_blocks = extract_body_paragraphs(
                 text,
                 title=title,
-                recipient=_first(final, "主送机关"),
+                recipient=recipient,
                 date=_first(final, "成文日期"),
-                org_signature=_first(final, "发文机关署名"),
+                org_signature=org_signature,
                 org_mark=org_mark,
                 sdk_result=final,
             )
@@ -191,17 +182,17 @@ class OnnxFieldRecognizer:
 
         data = {
             "header": {
-                "copy_number": _first(final, "份号"),
-                "secret_level": secret,
-                "secret_period": period,
-                "urgency": _first(final, "紧急程度"),
-                "issuer_sign": _first(final, "签发人"),
+                "copy_number": "" if as_order else _first(final, "份号"),
+                "secret_level": "" if as_order else secret,
+                "secret_period": "" if as_order else period,
+                "urgency": "" if as_order else _first(final, "紧急程度"),
+                "issuer_sign": "" if (as_minutes or as_order or as_letter) else _first(final, "签发人"),
                 "org_mark": org_mark,
-                "doc_number": "" if as_minutes else _first(final, "发文字号"),
+                "doc_number": "" if (as_minutes or as_order) else _first(final, "发文字号"),
             },
             "main": {
                 "title": title,
-                "recipient": _first(final, "主送机关"),
+                "recipient": recipient,
                 "body_blocks": body_blocks,
                 "attachment_caption": _join_attachment_captions(final),
             },
@@ -209,16 +200,29 @@ class OnnxFieldRecognizer:
                 "date": _first(final, "成文日期"),
                 "note": _first(final, "附注"),
                 "attachment": "",
-                "org_signature": "" if as_minutes else _first(final, "发文机关署名"),
-                "print_org": _first(final, "印发机关"),
-                "print_date": _first(final, "印发日期"),
+                "org_signature": org_signature,
+                "print_org": "" if as_letter else _first(final, "印发机关"),
+                "print_date": "" if as_letter else _first(final, "印发日期"),
             },
         }
         model = ModelOutput.from_dict(data)
         model._sdk_cc = _first(final, "抄送机关")  # type: ignore[attr-defined]
+
         if as_minutes:
             model._minutes_issue_no = format_issue_no(_first(final, "期号"))  # type: ignore[attr-defined]
             model._minutes_attendance = _join_name_field(final, "出席")  # type: ignore[attr-defined]
             model._minutes_leave = _join_name_field(final, "请假")  # type: ignore[attr-defined]
             model._minutes_liexi = _join_name_field(final, "列席")  # type: ignore[attr-defined]
+
+        if as_order:
+            model._is_order = True  # type: ignore[attr-defined]
+            raw_no = _first(final, "令号")
+            model._order_no = format_order_no(raw_no) or raw_no  # type: ignore[attr-defined]
+            # 签署职务按文中顺序；姓名单独字段，不进职务文本
+            titles = normalize_order_signers(_all_texts(final, "签署职务"))
+            model._order_signers = titles  # type: ignore[attr-defined]
+
+        if as_letter:
+            model._is_letter = True  # type: ignore[attr-defined]
+
         return model

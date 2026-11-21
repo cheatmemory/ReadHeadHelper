@@ -675,6 +675,49 @@ def _label_at(text, pos):
     return None
 
 
+def repair_signer(result, text):
+    """签署姓名边界修正（命令文种）。
+
+    实测两类越界：
+      1. 姓名后紧跟汉字日期行（「陈德胜」+「二〇二六年…」）=> 模型吞掉行首「二」，成「陈德胜二」。
+      2. 整份只有汉字日期行时，模型把「二〇」当姓名。
+    处理：去掉尾部被吞的日期首字；纯日期前缀的姓名整条丢弃。
+    """
+    items = result.get("签署姓名")
+    if not items:
+        return result
+    keep = []
+    for it in items:
+        v = it.get("text") or ""
+        s, e = it.get("start", 0), it.get("end", 0)
+        # 尾部「二」后面紧跟「〇」=> 是下一行日期的首字
+        while v.endswith("二") and text[e:e + 1] == "〇":
+            v = v[:-1]
+            e -= 1
+        # 跨行吞进的换行与空白：裁掉（模型常给出「陈德胜\n二」这类跨行值）
+        while v and v[-1] in "\n\r \u3000\t":
+            v = v[:-1]
+            e -= 1
+        while v and v[0] in "\n\r \u3000\t":
+            v = v[1:]
+            s += 1
+        # 纯「二〇…」或空值：不是姓名
+        if not v or re.fullmatch(r"[二〇零]+", v):
+            continue
+        if v != it.get("text"):
+            it = dict(it)
+            it["text"] = v
+            it["start"] = s
+            it["end"] = e
+            it["source"] = "regex"
+        keep.append(it)
+    if keep:
+        result["签署姓名"] = keep
+    else:
+        result.pop("签署姓名", None)
+    return result
+
+
 def repair_attend(result, text):
     """出席/列席/请假：拼回跨字段的断字碎片，并按行标签纠正字段归属。"""
     if not any(result.get(f) for f in ATT_FIELDS):
@@ -825,6 +868,7 @@ def postprocess(result, text):
     result = repair_cc(result, text)
     result = repair_print(result, lines)
     result = repair_attend(result, text)
+    result = repair_signer(result, text)
     # 附件说明：一行里用顿号列多个附件 => 拆成多条（每段 >= 6 字才拆，避免误拆机关名）
     atts = result.get("附件说明")
     if atts:

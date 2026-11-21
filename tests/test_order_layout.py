@@ -16,10 +16,9 @@ from core.ir.order import (
     order_export_basename,
     strip_signer_title,
 )
-from core.ir.schema import BodyBlock, DocKind, LayoutIR
+from core.ir.schema import BodyBlock, DocKind, LayoutIR, ModelOutput
 from core.layout import units as U
 from core.layout.engine import DocxEngine
-from core.recognize.order_regex import extract_order_fields, recognize_order
 
 om._app_failed = True
 om._app = None
@@ -72,6 +71,8 @@ def test_format_order_no_no_space():
     assert format_order_no("第 1 号") == "第1号"
     assert format_order_no("1") == "第1号"
     assert format_order_no("第1号") == "第1号"
+    assert format_order_no("第九号") == "第9号"
+    assert format_order_no("第十二号") == "第12号"
     assert format_order_no("江政发〔2026〕1号") == ""
     assert " " not in format_order_no("第 18 号")
 
@@ -218,26 +219,25 @@ def test_apply_order_from_source():
     assert ir.title == ""
 
 
-def test_order_regex_sample_text():
-    text = (
-        "江州市人民政府令\n"
-        "第 1 号\n"
-        "\n"
-        "《江州市某处管理办法》已经市人民政府第12次常务会议通过，现予公布，"
-        "自2027年1月1日起施行。\n"
-        "\n"
-        "市长　张明远\n"
-        "2026年10月25日\n"
+def test_order_model_attrs_to_ir():
+    """命令字段由 ONNX 产出后挂 _order_*；不再走 order_regex。"""
+    model = ModelOutput.from_dict(
+        {
+            "header": {"org_mark": "江州市人民政府令"},
+            "main": {
+                "body_blocks": [
+                    "《江州市某处管理办法》已经市人民政府第12次常务会议通过，现予公布，自2027年1月1日起施行。"
+                ]
+            },
+            "footer": {"date": "2026年10月25日"},
+        }
     )
-    fields = extract_order_fields(text)
-    assert fields["org_mark"] == "江州市人民政府令"
-    assert fields["order_no"] == "第1号"
-    assert any("现予公布" in b for b in fields["body_blocks"])
-    assert fields["signers"] == ["市长"]
-    assert "张明远" not in "".join(fields["signers"])
-    assert fields["date"] == "2026年10月25日"
-
-    model = recognize_order(text)
-    assert getattr(model, "_is_order") is True
-    assert model.header.org_mark.endswith("令")
-    assert model._order_no == "第1号"
+    model._is_order = True  # type: ignore[attr-defined]
+    model._order_no = "第 1 号"  # type: ignore[attr-defined]
+    model._order_signers = ["市长　张明远"]  # type: ignore[attr-defined]
+    ir = LayoutIR()
+    apply_order_to_ir(ir, source_text="", model=model)
+    assert ir.doc_kind == DocKind.ORDER
+    assert ir.order_no == "第1号"
+    assert ir.signers == ["市长"]
+    assert "张明远" not in "".join(ir.signers)

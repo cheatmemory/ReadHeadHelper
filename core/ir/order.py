@@ -7,18 +7,71 @@ from typing import Any
 
 from core.ir.schema import DocKind, LayoutIR
 
-_ORDER_NO_RE = re.compile(r"第\s*(\d+)\s*号")
+_ORDER_NO_RE = re.compile(r"第\s*([0-9〇零一二三四五六七八九十百两]+)\s*号")
 # 职务后常见「全角空格/空格 + 姓名」权宜写法 → 只留职务
 _TITLE_STRIP_NAME_RE = re.compile(
     r"^(.+?)(?:[\s　]+[\u4e00-\u9fff·•]{2,8}|[\s　]*签发)$"
 )
 _WIN_BAD_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_CN_DIGITS = {
+    "〇": 0,
+    "零": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+
+
+def _cn_numeral_to_int(token: str) -> int | None:
+    """中文令号数字 → int（支持 九 / 十二 / 二十三 / 一百 等常见形态）。"""
+    s = (token or "").strip()
+    if not s:
+        return None
+    if s.isdigit():
+        return int(s)
+    if s == "十":
+        return 10
+    if s == "百":
+        return 100
+    # 一百 / 一百零五 / 一百二十
+    if "百" in s:
+        left, _, right = s.partition("百")
+        hundreds = 1 if not left else _CN_DIGITS.get(left)
+        if hundreds is None:
+            return None
+        if not right:
+            return hundreds * 100
+        if right.startswith("零") and len(right) == 2:
+            ones = _CN_DIGITS.get(right[1])
+            return hundreds * 100 + ones if ones is not None else None
+        rest = _cn_numeral_to_int(right)
+        return hundreds * 100 + rest if rest is not None else None
+    # 二十 / 十二 / 二十三
+    if "十" in s:
+        left, _, right = s.partition("十")
+        tens = 1 if not left else _CN_DIGITS.get(left)
+        if tens is None:
+            return None
+        if not right:
+            return tens * 10
+        ones = _CN_DIGITS.get(right)
+        return tens * 10 + ones if ones is not None and len(right) == 1 else None
+    if len(s) == 1 and s in _CN_DIGITS:
+        return _CN_DIGITS[s]
+    return None
 
 
 def format_order_no(raw: str) -> str:
-    """展示唯一形态：无空格「第{N}号」。无法解析则返回空串。
+    """展示唯一形态：无空格「第{N}号」（阿拉伯数字）。无法解析则返回空串。
 
-    不含发文字号结构（〔〕等）；纯数字按 N 补成「第N号」。
+    不含发文字号结构（〔〕等）；纯数字或中文数字按 N 补成「第N号」。
     """
     s = (raw or "").strip()
     if not s:
@@ -26,11 +79,15 @@ def format_order_no(raw: str) -> str:
     # 发文字号形态一律拒绝
     if "〔" in s or "〕" in s or "[" in s or "]" in s:
         return ""
-    if re.fullmatch(r"第\s*\d+\s*号", s):
-        m = _ORDER_NO_RE.search(s)
-        return f"第{int(m.group(1))}号" if m else ""
+    m = _ORDER_NO_RE.fullmatch(s) or _ORDER_NO_RE.search(s)
+    if m and re.fullmatch(r"第\s*[0-9〇零一二三四五六七八九十百两]+\s*号", s):
+        n = _cn_numeral_to_int(m.group(1))
+        return f"第{n}号" if n is not None else ""
     if s.isdigit():
         return f"第{int(s)}号"
+    n = _cn_numeral_to_int(s)
+    if n is not None:
+        return f"第{n}号"
     return ""
 
 
@@ -107,9 +164,9 @@ def extract_order_no(source_text: str, *, doc_number: str = "") -> str:
     if formatted:
         return formatted
     for line in (source_text or "").splitlines()[:40]:
-        m = _ORDER_NO_RE.search(line.strip())
-        if m:
-            return f"第{int(m.group(1))}号"
+        formatted = format_order_no(line.strip())
+        if formatted:
+            return formatted
     return ""
 
 

@@ -85,12 +85,12 @@ def model_to_partial_ir(model: ModelOutput, source_text: str = "") -> LayoutIR:
         org_marks=org_marks,
         body_tree=parse_body_blocks(body_paras),
     )
-    # 命令优先：标志以命令/令结尾，或正则识别器已挂 _is_order
+    # 命令优先：SDK doc_kind=命令（_is_order）或标志以命令/令结尾
     if looks_like_order(org_marks=org_marks, source_text=source_text) or getattr(
         model, "_is_order", False
     ):
         return apply_order_to_ir(ir, source_text=source_text, model=model)
-    # 信函：字号函代字 / 标题以函结尾 / 正则已挂 _is_letter（优先于纪要）
+    # 信函：SDK doc_kind=信函（_is_letter）或字号/标题规则（优先于纪要）
     if getattr(model, "_is_letter", False) or looks_like_letter(
         doc_number=ir.doc_number,
         title=ir.title,

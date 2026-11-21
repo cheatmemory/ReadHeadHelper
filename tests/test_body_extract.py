@@ -249,3 +249,70 @@ def test_footer_org_does_not_steal_start():
     assert "一、第一条" in joined
     assert "印发" not in joined
     assert not joined.startswith("××市人民政府文件")
+
+
+def test_order_body_window_after_order_no_before_signer():
+    """命令：起点在令号后，终点在签署职务前；不盲砍正文、不吞职务。"""
+    text = (
+        "重庆市南岸区人民政府令\n"
+        "第7号\n"
+        "为有效预防和扑救森林火灾，保护森林资源。\n"
+        "一、戒严区域\n"
+        "南山等镇街范围内的全部林区。\n"
+        "三、禁止行为\n"
+        "戒严期内严禁一切野外用火。\n"
+        "区长\n"
+        "2026年11月28日\n"
+        "（此件公开发布）\n"
+    )
+    ono = "第7号"
+    signer = "区长"
+    date = "2026年11月28日"
+    sdk = {
+        "发文机关标志": [
+            {
+                "text": "重庆市南岸区人民政府令",
+                "start": 0,
+                "end": len("重庆市南岸区人民政府令"),
+                "probability": 0.99,
+            }
+        ],
+        "令号": [
+            {
+                "text": ono,
+                "start": text.index(ono),
+                "end": text.index(ono) + len(ono),
+                "probability": 0.99,
+            }
+        ],
+        "签署职务": [
+            {
+                "text": signer,
+                "start": text.index(signer),
+                "end": text.index(signer) + len(signer),
+                "probability": 0.99,
+            }
+        ],
+        "成文日期": [
+            {
+                "text": date,
+                "start": text.index(date),
+                "end": text.index(date) + len(date),
+                "probability": 0.99,
+            }
+        ],
+    }
+    paras = extract_body_paragraphs(
+        text,
+        date=date,
+        org_mark="重庆市南岸区人民政府令",
+        sdk_result=sdk,
+    )
+    joined = "\n".join(paras)
+    assert joined.startswith("为有效预防")
+    assert "三、禁止行为" in joined
+    assert "戒严期内严禁一切野外用火" in joined
+    assert "区长" not in joined
+    assert "2026年11月28日" not in joined
+    assert "人民政府令" not in joined
+    assert "第7号" not in joined

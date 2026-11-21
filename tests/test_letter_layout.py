@@ -20,10 +20,9 @@ from core.ir.letter import (
     strip_recipient_colon,
     strip_wenjian_suffix,
 )
-from core.ir.schema import BodyBlock, DocKind, LayoutIR, SealMode
+from core.ir.schema import BodyBlock, DocKind, LayoutIR, ModelOutput, SealMode
 from core.layout import units as U
 from core.layout.engine import DocxEngine
-from core.recognize.letter_regex import extract_letter_fields, recognize_letter
 
 om._app_failed = True
 om._app = None
@@ -120,22 +119,32 @@ def test_strip_helpers():
     assert normalize_urgency("特提") == ""
 
 
-def test_letter_regex_extract():
-    fields = extract_letter_fields(SAMPLE)
-    assert "函" in fields["doc_number"]
-    assert fields["doc_number"].startswith("江政函")
-    assert fields["title"].endswith("函")
-    assert fields["recipient"] == "江州省应急管理厅"
-    assert "：" not in fields["recipient"]
-    assert fields["org_signature"]
-    assert fields["date"] == "2026年11月10日"
-    assert fields["cc"] == "省委办公厅"
-    assert fields["body_blocks"]
-    model = recognize_letter(SAMPLE)
-    assert getattr(model, "_is_letter", False)
+def test_letter_model_attrs_to_ir():
+    """信函字段由 ONNX 产出后挂 _is_letter；不再走 letter_regex。"""
+    model = ModelOutput.from_dict(
+        {
+            "header": {
+                "org_mark": "江州市人民政府",
+                "doc_number": "江政函〔2026〕15号",
+            },
+            "main": {
+                "title": "关于商洽联合举办2026年冬季应急演练有关事宜的函",
+                "recipient": "江州省应急管理厅：",
+                "body_blocks": ["现就有关事宜函告如下。"],
+            },
+            "footer": {
+                "org_signature": "江州市人民政府",
+                "date": "2026年11月10日",
+            },
+        }
+    )
+    model._is_letter = True  # type: ignore[attr-defined]
+    model._sdk_cc = "抄送：省委办公厅。"  # type: ignore[attr-defined]
     ir = model_to_partial_ir(model, source_text=SAMPLE)
     assert ir.is_letter()
     assert ir.seal_mode == SealMode.RESERVED
+    assert ir.recipient == "江州省应急管理厅"
+    assert ir.cc_recipients == "省委办公厅"
 
 
 def test_letter_export_basename():
