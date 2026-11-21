@@ -429,16 +429,34 @@ def fill_note(result, lines, a):
 
 
 def fill_cc(result, lines, a):
-    """抄送：抄送：开头的行。"""
-    if result.get("抄送机关"):
-        return result
+    """抄送：有「抄送：」行时以整行正文为准（覆盖模型残缺多 span）。
+
+    模型对长抄送常拆成多段且漏中间；只要版式行完整，一律用正则整行替换。
+    无抄送行时不动模型结果。
+    """
     for i, raw, nl in lines:
         if _is_noise(nl):
             continue
         m = CC_RE.match(nl)
-        if m:
-            result["抄送机关"] = [{"text": m.group(1), "prob": 1.0, "source": "regex"}]
+        if not m:
+            continue
+        raw_s = raw.strip()
+        if "：" in raw_s:
+            body = raw_s.split("：", 1)[1].strip()
+        elif ":" in raw_s:
+            body = raw_s.split(":", 1)[1].strip()
+        else:
+            body = (m.group(1) or "").strip()
+        if not body:
             break
+        items = result.get("抄送机关") or []
+        joined = _flat("".join(_flat(x.get("text", "")) for x in items))
+        line_flat = _flat(body)
+        # 已与整行一致（单 span 抽全）→ 保留模型偏移；否则整行覆盖
+        if len(items) == 1 and joined == line_flat:
+            break
+        result["抄送机关"] = [{"text": body, "prob": 1.0, "source": "regex"}]
+        break
     return result
 
 
@@ -462,7 +480,12 @@ def fill_print(result, lines, a):
 # ---------- 附件说明（逐行收块） ----------
 ATT_HEAD_RE = re.compile(r"^附件\s*\d*\s*[：:]")
 ATT_ITEM_RE = re.compile(r"^\d+\s*[.、]\s*")
-ATT_STOP_RE = re.compile(r"^(?:\d{4}年\d{1,2}月\d{1,2}日|[（(]此件|抄送[：:]|印发)")
+# v5.1：停止词含出席/请假/列席，避免附件收块吞掉纪要名单
+ATT_STOP_RE = re.compile(
+    r"^(?:\d{4}年\d{1,2}月\d{1,2}日|[（(]此件|抄送[：:]|印发|出席[：:]|请假[：:]|列席[：:])"
+)
+# 附件/抄送污染：条目内夹带名单或抄送标签
+POLLUTED_RE = re.compile(r"出席\s*[：:]|请假\s*[：:]|列席\s*[：:]|抄送\s*[：:]")
 
 
 def fill_attachment_caption(result, text):
@@ -748,6 +771,128 @@ def repair_attend(result, text):
     return result
 
 
+_ATTEND_HEAD_RE = re.compile(r"^(出席|请假|列席)\s*[：:](.*)$")
+_ATTEND_CONT_STOP_RE = re.compile(
+    r"^(?:出席|请假|列席)\s*[：:]|^抄送\s*[：:]|^[（(]此件|印发\s*$"
+)
+
+
+def _person_core(s):
+    """名单去重用的姓名核心；集合称（无单独人名）整串保留。"""
+    flat = _flat(s)
+    if not flat:
+        return ""
+    m = re.match(r"^([\u4e00-\u9fa5·]{2,8})[（(]", flat)
+    if m:
+        return m.group(1)
+    # 「各…同志/人员」等集合称：不作尾部人名截取
+    if flat.startswith("各") or flat.endswith(("同志", "人员", "代表")):
+        return flat
+    m2 = re.search(r"([\u4e00-\u9fa5]{2,4})$", flat)
+    if m2 and len(flat) > len(m2.group(1)) + 1:
+        return m2.group(1)
+    return flat
+
+
+def fill_attend_lines(result, text):
+    """纪要名单整行兜底：按「出席/请假/列席：」行拆条，优先于残缺模型值。
+
+    某字段正文中无对应标签行时，完全不动该字段的模型结果。
+    """
+    raw_lines = (text or "").split("\n")
+    # 行号 → 该行在全文中的起始偏移
+    line_starts = []
+    pos = 0
+    for i, ln in enumerate(raw_lines):
+        line_starts.append(pos)
+        pos += len(ln) + (1 if i < len(raw_lines) - 1 else 0)
+
+    found_labels = set()
+    regex_by_field = {f: [] for f in ATT_FIELDS}
+
+    i = 0
+    while i < len(raw_lines):
+        m = _ATTEND_HEAD_RE.match(_n(raw_lines[i]))
+        if not m:
+            i += 1
+            continue
+        lab = m.group(1)
+        found_labels.add(lab)
+        # 原文标签后内容（保留原文形态）
+        raw_ln = raw_lines[i]
+        colon = "：" if "：" in raw_ln else (":" if ":" in raw_ln else "")
+        if colon:
+            body = raw_ln.split(colon, 1)[1]
+        else:
+            body = m.group(2) or ""
+        parts = [body]
+        j = i + 1
+        while j < len(raw_lines):
+            nl = _n(raw_lines[j])
+            if not nl:
+                break
+            if _ATTEND_CONT_STOP_RE.match(nl) or DATE_LINE_RE.match(nl):
+                break
+            if PRINT_RE.match(nl) or nl.endswith("印发"):
+                break
+            parts.append(raw_lines[j].strip())
+            j += 1
+        joined = "".join(p.strip() for p in parts if p is not None)
+        # 按顿号/逗号/分号拆人
+        pieces = [p.strip() for p in re.split(r"[、，,；;]", joined) if p.strip()]
+        # 为每条估 start/end：在标签行起的文本窗内顺序查找
+        window = "\n".join(raw_lines[i:j]) if j > i else raw_lines[i]
+        window_base = line_starts[i]
+        search_from = 0
+        for piece in pieces:
+            rel = window.find(piece, search_from)
+            if rel < 0:
+                rel = window.find(piece)
+            if rel >= 0:
+                st = window_base + rel
+                en = st + len(piece)
+                search_from = rel + len(piece)
+            else:
+                st = en = None
+            regex_by_field[lab].append(
+                {"text": piece, "prob": 1.0, "source": "regex", "start": st, "end": en}
+            )
+        i = j if j > i else i + 1
+
+    for lab in ATT_FIELDS:
+        if lab not in found_labels:
+            continue
+        R = regex_by_field.get(lab) or []
+        if not R:
+            result[lab] = []
+            continue
+        M = [x for x in (result.get(lab) or []) if isinstance(x, dict) and _flat(x.get("text", ""))]
+        # 模型条目与正则双向包含 → 丢模型留正则
+        kept_m = []
+        for m_it in M:
+            mf = _flat(m_it.get("text", ""))
+            if not mf:
+                continue
+            if any(
+                mf == _flat(r["text"]) or mf in _flat(r["text"]) or _flat(r["text"]) in mf
+                for r in R
+            ):
+                continue
+            kept_m.append(m_it)
+        merged = list(R) + kept_m
+        # 按姓名核心去重，保留更长更完整的一条
+        by_core = {}
+        for it in merged:
+            core = _person_core(it.get("text", "")) or _flat(it.get("text", ""))
+            prev = by_core.get(core)
+            if prev is None or len(_flat(it.get("text", ""))) > len(_flat(prev.get("text", ""))):
+                by_core[core] = it
+        out = list(by_core.values())
+        out.sort(key=lambda z: (z.get("start") is None, z.get("start") if z.get("start") is not None else 0))
+        result[lab] = out
+    return result
+
+
 def validate(result, text):
     """模型输出全部违反格式 => 删掉该字段（正则随后补正确值）。"""
     for f, ok in VALIDATORS.items():
@@ -868,6 +1013,7 @@ def postprocess(result, text):
     result = repair_cc(result, text)
     result = repair_print(result, lines)
     result = repair_attend(result, text)
+    result = fill_attend_lines(result, text)  # v5.1：名单整行兜底，优先于残缺模型值
     result = repair_signer(result, text)
     # 附件说明：一行里用顿号列多个附件 => 拆成多条（每段 >= 6 字才拆，避免误拆机关名）
     atts = result.get("附件说明")
@@ -892,6 +1038,15 @@ def postprocess(result, text):
                 seen.add(t)
                 uniq.append(x)
             result["附件说明"] = uniq
+    # v5.1：先丢掉夹带名单/抄送标签的污染条目，再做子串去重
+    for f in ("附件说明", "抄送机关"):
+        items = result.get(f)
+        if not items:
+            continue
+        result[f] = [
+            x for x in items
+            if not POLLUTED_RE.search(_flat(x.get("text", "")))
+        ]
     # 多值字段：断行碎片/半截值是完整值的子串 => 只留完整值
     for f in ("附件说明", "抄送机关"):
         items = result.get(f)

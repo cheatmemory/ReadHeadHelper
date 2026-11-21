@@ -374,10 +374,27 @@ class GovDocExtractor:
         self.max_seq_len = max_seq_len
         self.batch_size = batch_size
 
+    @staticmethod
+    def _split_chunks(text, limit):
+        """按字符上限切块；优先在换行处断开，避免把「出席：」与名单拆到两块。"""
+        if len(text) <= limit:
+            return [text]
+        chunks, i = [], 0
+        while i < len(text):
+            j = min(i + limit, len(text))
+            if j < len(text):
+                k = text.rfind("\n", i + 1, j)
+                # 回退量不超过 40 字，防止块过短
+                if k > i + limit - 40:
+                    j = k + 1
+            chunks.append(text[i:j])
+            i = j
+        return chunks
+
     def _single_stage(self, text, prompt):
         """Run one (prompt, text) over split chunks; return list of results."""
         max_predict_len = self.max_seq_len - len(prompt) - 3
-        chunks = [text[i:i + max_predict_len] for i in range(0, len(text), max_predict_len)] or [""]
+        chunks = self._split_chunks(text, max_predict_len) or [""]
 
         encoded = [self.tokenizer.encode_pair(prompt, c, self.max_seq_len) for c in chunks]
         results = []

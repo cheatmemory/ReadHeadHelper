@@ -51,6 +51,19 @@ def _join_org_signature(result: dict) -> str:
     return "\n".join(parts)
 
 
+def _join_cc_field(result: dict) -> str:
+    """抄送机关：合并全部 span（_first 会丢掉第 2 段起）。
+
+    postprocess 通常已归一成整行单条；若仍多段，用顿号拼接。
+    """
+    parts = _all_texts(result, "抄送机关")
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return "、".join(parts)
+
+
 def _join_attachment_captions(result: dict) -> str:
     """合并全部「附件说明」条目（_first 只会丢掉第 2 条起）。
 
@@ -206,7 +219,7 @@ class OnnxFieldRecognizer:
             },
         }
         model = ModelOutput.from_dict(data)
-        model._sdk_cc = _first(final, "抄送机关")  # type: ignore[attr-defined]
+        model._sdk_cc = _join_cc_field(final)  # type: ignore[attr-defined]
 
         if as_minutes:
             model._minutes_issue_no = format_issue_no(_first(final, "期号"))  # type: ignore[attr-defined]
