@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import re
 from pathlib import Path
 
 import pytest
@@ -134,6 +135,154 @@ def test_glued_header_body_keeps_body_span():
     # 不应只剩最后一句
     assert len(joined) > 80
     assert not joined.startswith("市城管局")
+
+
+def test_order_leadin_not_stripped_as_recipient():
+    """命令正文起句「经研究决定：」不得被当成主送短行丢掉。"""
+    text = (
+        "兰州市人民政府令\n"
+        "第65号\n"
+        "\n"
+        "　　根据工作需要，经研究决定：\n"
+        "　　任命谭惠芳为兰州市自然资源和规划局局长；\n"
+        "　　任命郝思齐为兰州市民政局局长；\n"
+        "\n"
+        "市长　　钟丽萍\n"
+        "2026年12月21日\n"
+    )
+    sdk = {
+        "发文机关标志": [{"text": "兰州市人民政府令", "start": 0, "end": 8, "probability": 0.99}],
+        "令号": [{"text": "第65号", "start": text.index("第65号"), "end": text.index("第65号") + 4, "probability": 0.99}],
+        "签署职务": [{"text": "市长", "start": text.index("市长"), "end": text.index("市长") + 2, "probability": 0.99}],
+        "成文日期": [
+            {
+                "text": "2026年12月21日",
+                "start": text.index("2026年12月21日"),
+                "end": text.index("2026年12月21日") + len("2026年12月21日"),
+                "probability": 0.99,
+            }
+        ],
+    }
+    paras = extract_body_paragraphs(
+        text, org_mark="兰州市人民政府令", date="2026年12月21日", sdk_result=sdk
+    )
+    joined = "\n".join(paras)
+    assert "根据工作需要，经研究决定" in joined
+    assert "任命谭惠芳" in joined
+    assert "市长" not in joined
+
+
+def test_letter_leadin_not_stripped_as_recipient():
+    """信函导语「……协助做好以下工作：」不得被当成主送丢掉。"""
+    text = (
+        "云南省市场监督管理局\n"
+        "滇市监函〔2026〕85号\n"
+        "关于商请协助做好生物医药产业发展工作的函\n"
+        "云南省生态环境局：\n"
+        "　　为统筹推进生物医药产业发展工作，形成工作合力，商请你单位协助做好以下工作：\n"
+        "　　一、安排专人负责对接联络。\n"
+        "　　二、做好数据汇总。\n"
+        "云南省市场监督管理局\n"
+        "2026年4月1日\n"
+    )
+    recip = "云南省生态环境局"
+    title = "关于商请协助做好生物医药产业发展工作的函"
+    sdk = {
+        "标题": [{"text": title, "start": text.index(title), "end": text.index(title) + len(title)}],
+        "主送机关": [
+            {"text": recip, "start": text.index(recip), "end": text.index(recip) + len(recip)}
+        ],
+        "发文机关署名": [
+            {
+                "text": "云南省市场监督管理局",
+                "start": text.rindex("云南省市场监督管理局"),
+                "end": text.rindex("云南省市场监督管理局") + len("云南省市场监督管理局"),
+            }
+        ],
+        "成文日期": [
+            {
+                "text": "2026年4月1日",
+                "start": text.index("2026年4月1日"),
+                "end": text.index("2026年4月1日") + len("2026年4月1日"),
+            }
+        ],
+    }
+    paras = extract_body_paragraphs(
+        text, title=title, recipient=recip, date="2026年4月1日", sdk_result=sdk
+    )
+    joined = "\n".join(paras)
+    assert "商请你单位协助做好以下工作" in joined
+    assert "一、安排专人" in joined
+    assert not joined.startswith("一、")
+
+
+def test_minutes_glued_mark_issue_keeps_year_digit():
+    """纪要标志与期号粘同一行时，不得盲砍吞掉正文年份首位。"""
+    body_lead = "2025年1月6日下午，市长丁春华在台州市人民政府第一会议室主持召开专题会议。"
+    text = (
+        "台州市人民政府专题会议纪要第79期\n"
+        "\n"
+        f"{body_lead}\n"
+        "\n"
+        "一、会议认为。做好总部经济培育工作。\n"
+        "\n"
+        "出席：陈丽萍、郝晓岚。\n"
+        "列席：汪传伟。\n"
+        "\n"
+        "2026年8月19日\n"
+        "\n"
+        "抄送：台州市委办公室。\n"
+    )
+    # 模拟 SDK 只标到「…纪要」、无期号字段（通用 schema）
+    mark = "台州市人民政府专题会议纪要"
+    sdk = {
+        "发文机关标志": [
+            {"text": mark, "start": 0, "end": len(mark), "probability": 0.99}
+        ],
+        "出席": [
+            {
+                "text": "陈丽萍",
+                "start": text.index("陈丽萍"),
+                "end": text.index("陈丽萍") + 3,
+                "probability": 0.9,
+            }
+        ],
+        "成文日期": [
+            {
+                "text": "2026年8月19日",
+                "start": text.index("2026年8月19日"),
+                "end": text.index("2026年8月19日") + len("2026年8月19日"),
+                "probability": 0.9,
+            }
+        ],
+    }
+    paras = extract_body_paragraphs(text, org_mark=mark, date="2026年8月19日", sdk_result=sdk)
+    joined = "\n".join(paras)
+    assert paras
+    assert paras[0].startswith("2025年")
+    assert not paras[0].startswith("025年")
+    assert body_lead[:10] in joined
+    assert "出席" not in joined
+    assert "第79期" not in joined
+
+
+def test_body_start_never_splits_year_token():
+    """契约：正文起点不得落在「YYYY年」中间。"""
+    from core.body_structure.extract import extract_body_with_trace
+
+    text = (
+        "台州市人民政府专题会议纪要第79期\n\n"
+        "2025年1月6日下午召开会议。\n"
+        "出席：甲。\n"
+        "2026年8月19日\n"
+    )
+    _paras, diag = extract_body_with_trace(text, org_mark="台州市人民政府专题会议纪要")
+    start = int(diag["start"])
+    # 起点处若紧邻数字年，必须是完整四位年之首
+    tail = text[start : start + 8]
+    if "年" in tail:
+        m = re.match(r"(\d{4})年", text[start:])
+        assert m, f"start={start} splits year-like token: {tail!r}"
 
 
 def test_minutes_body_strips_secret_mark_and_list():

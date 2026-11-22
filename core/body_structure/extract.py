@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """从全文抽取正文段落。
 
-优先级（从稳到弱）：
-1. 模型字段的字符偏移 start/end（SDK 自带）
-2. 文首区域内的「首次」文本锚点（主送 > 标题）
-3. 版式启发式（主送冒号行、附件/抄送/落款）
-4. 失败时保守裁切首尾，绝不把整篇当一段（除非全文极短）
+正文 = 版头栏栅结束之后 → 版记栏栅开始之前。
+
+起点：文首区内所有版头栏栅（主送/标题/令号/期号/文号/标志等）取最靠后者；
+      与文种 schema 解耦，字段 span 与原文正则并用。
+终点：起点之后最早的落款/附件/名单/抄送等。
+禁止：按固定字符数盲砍文首（会吞年份数字等）。
 
 层级识别不在此文件；见 parser.parse_body_blocks。
 """
@@ -37,6 +38,9 @@ _DATE_ANY = re.compile(r"\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日")
 _PRINT_TAIL = re.compile(r"印发\s*$")
 _PRINT_ANY = re.compile(r".{2,40}印发\s*$", re.M)
 _DOC_NO = re.compile(r"[〔\[]\d{4}[〕\]].*号")
+_DOC_NO_LINE = re.compile(
+    r"^[\u4e00-\u9fa5]{0,12}[〔\[]\s*\d{4}\s*[〕\]]\s*第?\s*\d+\s*号$"
+)
 _RECIP_TAIL = re.compile(r"各[^：:\n]{0,60}[：:]")
 _MINUTES_LIST = re.compile(r"^(出席|请假|列席)\s*[:：]")
 _MINUTES_LIST_ANY = re.compile(r"(?:^|\n)(出席|请假|列席)\s*[:：]")
@@ -45,13 +49,28 @@ _SECRET_LINE = re.compile(
 )
 _URGENCY_LINE = re.compile(r"^(特提|特急|加急|平急)(?:文件)?$")
 _COPY_LINE = re.compile(r"^\d{6}$")
-_ISSUE_LINE = re.compile(r"^第\s*\d+\s*期$")
+_ISSUE_LINE = re.compile(r"^(?:\d{4}\s*年\s*)?第?\s*\d{1,4}\s*期$")
+_ISSUE_ANY = re.compile(r"第\s*\d{1,4}\s*期")
 _MARK_LINE = re.compile(r"^[\u4e00-\u9fa5A-Za-z0-9（）()\-·、]{2,40}纪要$")
+_MARK_ISSUE_GLUE = re.compile(
+    r"^[\u4e00-\u9fa5A-Za-z0-9（）()\-·、]{2,40}纪要\s*第\s*\d{1,4}\s*期$"
+)
 # 命令令号行（阿拉伯/中文数字）
 _ORDER_NO_LINE = re.compile(
     r"^第\s*[0-9〇零一二三四五六七八九十百两]+\s*号\s*$"
 )
+_ORDER_NO_ANY = re.compile(r"第\s*[0-9〇零一二三四五六七八九十百两]+\s*号")
 _ORDER_MARK_TAIL = re.compile(r"(?:命令|令)$")
+
+# 版头栏栅字段：取其 end 作为正文起点候选（文首区内取最靠后）
+_HEADER_FENCE_KEYS = (
+    "主送机关",
+    "标题",
+    "令号",
+    "期号",
+    "发文字号",
+    "发文机关标志",
+)
 
 
 def _flat(s: str) -> str:
@@ -330,26 +349,176 @@ def _is_header_noise_line(s: str, *, org_mark: str = "", title: str = "") -> boo
         return True
     if _COPY_LINE.fullmatch(t) or _SECRET_LINE.fullmatch(t) or _URGENCY_LINE.fullmatch(t):
         return True
-    if _ISSUE_LINE.fullmatch(t):
+    if _ISSUE_LINE.fullmatch(t) or _ORDER_NO_LINE.fullmatch(t) or _DOC_NO_LINE.fullmatch(t):
         return True
-    if _MARK_LINE.fullmatch(t):
+    if _MARK_LINE.fullmatch(t) or _MARK_ISSUE_GLUE.fullmatch(t):
+        return True
+    if _ORDER_MARK_TAIL.search(t) and "关于" not in t and len(t) <= 40:
         return True
     flat_t = _flat(_norm_punct(t)).rstrip("：:")
     for needle in (org_mark, title):
         n = _flat(_norm_punct(needle or "")).rstrip("：:")
-        if n and len(n) >= 4 and (flat_t == n or flat_t.startswith(n) and len(flat_t) <= len(n) + 2):
+        if not n or len(n) < 4:
+            continue
+        if flat_t == n:
             return True
-    # 单独主送/抄送式短行（如「局属各单位：」）
-    if (t.endswith("：") or t.endswith(":")) and len(t) <= 40 and not _is_struct_line(t):
-        if "如下" in t:
+        # 标志后粘期号/令号/「文件」
+        if flat_t.startswith(n) and len(flat_t) <= len(n) + 12:
+            rest = flat_t[len(n) :]
+            if not rest or _ISSUE_ANY.fullmatch(rest) or _ORDER_NO_ANY.fullmatch(rest) or rest in (
+                "文件",
+                "函",
+            ):
+                return True
+    # 主送短行（如「局属各单位：」「××局：」）。
+    # 不可把正文起句「经研究决定：」「……以下工作：」当版头——那是少切首段的主因。
+    if (t.endswith("：") or t.endswith(":")) and len(t) <= 48 and not _is_struct_line(t):
+        core = t.rstrip("：:")
+        if re.search(
+            r"(如下|以下工作|经研究决定|现将有关|现就有关|收悉|现批复|现函复|现函告|"
+            r"通知如下|纪要如下|现纪要如下|商请你|请予支持)",
+            core,
+        ):
             return False
-        return True
+        if core.startswith("各") or re.search(
+            r"(人民政府|办公室|管理局|委员会|局|厅|部|委|办|单位|企业|公司|院校)$",
+            core,
+        ):
+            return True
+        return False
     return False
 
 
 def _after_field(text: str, start: int, field_len: int) -> int:
     """字段结束后跳过空白与全角/半角冒号。"""
     return _skip_colon_ws(text, start + field_len)
+
+
+def _skip_ws_newlines(text: str, pos: int) -> int:
+    n = len(text or "")
+    while pos < n and text[pos] in " \t\u3000\r\n":
+        pos += 1
+    return pos
+
+
+def _collect_header_fence_ends(
+    text: str,
+    result: dict[str, Any],
+    *,
+    header_hi: int,
+    title: str,
+    recipient: str,
+) -> list[tuple[int, str, str]]:
+    """文首版头栏栅终点列表 (pos, rule, label)。调用方取 max(pos)。"""
+    n = len(text or "")
+    hi = max(0, min(header_hi, n))
+    fences: list[tuple[int, str, str]] = []
+
+    def add(pos: int, rule: str, label: str) -> None:
+        if 0 < pos <= hi:
+            fences.append((pos, rule, label))
+
+    for key in _HEADER_FENCE_KEYS:
+        for sp in _items_to_spans(result, key):
+            if sp.start >= hi:
+                continue
+            end = sp.end
+            if key == "主送机关":
+                end = _skip_colon_ws(text, end)
+            add(end, f"model:{key}.end", f"模型偏移：{key} 结束处")
+
+    recip = (recipient or _first_text(result, "主送机关")).strip()
+    if recip:
+        core = recip.rstrip("：:").strip()
+        hit = _find_substr(text, recip, lo=0, hi=hi)
+        if hit is None and core:
+            hit = _find_substr(text, core, lo=0, hi=hi)
+        if hit is not None:
+            if text.startswith(recip, hit):
+                add(_after_field(text, hit, len(recip)), "anchor:主送机关", "文本锚点：主送机关之后")
+            else:
+                add(_after_field(text, hit, len(core)), "anchor:主送机关", "文本锚点：主送机关之后")
+
+    tit = (title or _first_text(result, "标题")).strip()
+    if tit:
+        hit = _find_substr(text, tit, lo=0, hi=hi)
+        if hit is not None:
+            add(_after_field(text, hit, len(tit)), "anchor:标题", "文本锚点：标题之后")
+
+    for key, rx, label in (
+        ("令号", _ORDER_NO_ANY, "令号"),
+        ("期号", _ISSUE_ANY, "期号"),
+    ):
+        needle = _first_text(result, key).strip()
+        if needle:
+            hit = _find_substr(text, needle, lo=0, hi=hi)
+            if hit is not None:
+                add(_after_field(text, hit, len(needle)), f"anchor:{key}", f"文本锚点：{label}之后")
+        # 原文扫描（不依赖 schema 是否含该字段；限文首）
+        for m in rx.finditer(text[:hi]):
+            # 令号「第N号」避免误吃正文引用：要求前后像独立栏栅
+            left = text[m.start() - 1] if m.start() > 0 else "\n"
+            if key == "令号" and left not in "\n\r\t\u3000 ":
+                # 允许紧跟在「令」标志后：…人民政府令第1号
+                if left not in "令命":
+                    continue
+            add(m.end(), f"regex:{key}", f"正则：文首{label}")
+
+    mark0 = _first_text(result, "发文机关标志").strip()
+    if mark0:
+        hit = _find_substr(text, mark0, lo=0, hi=hi)
+        if hit is not None:
+            add(_after_field(text, hit, len(mark0)), "anchor:发文机关标志", "文本锚点：发文机关标志之后")
+
+    docno = _first_text(result, "发文字号").strip()
+    if docno:
+        hit = _find_substr(text, docno, lo=0, hi=hi)
+        if hit is not None:
+            add(_after_field(text, hit, len(docno)), "anchor:发文字号", "文本锚点：发文字号之后")
+
+    lines, line_spans = _build_line_index(text)
+    for i, ln in enumerate(lines[:25]):
+        s = (ln or "").strip()
+        if not s:
+            continue
+        a, b = line_spans[i]
+        if a >= hi:
+            break
+        if (
+            _ORDER_NO_LINE.match(s)
+            or _ISSUE_LINE.match(s)
+            or _DOC_NO_LINE.match(s)
+            or _MARK_LINE.match(s)
+            or _MARK_ISSUE_GLUE.match(s)
+        ):
+            add(b, "anchor:header_line", f"版头行末：{s[:16]}")
+
+    m = _RECIP_TAIL.search(text[:hi])
+    if m:
+        add(m.end(), "heuristic:recipient_colon", "启发式：文首「各…：」行末")
+
+    return fences
+
+
+def _start_after_header_lines(
+    text: str,
+    *,
+    org_mark: str = "",
+    title: str = "",
+) -> tuple[int, str, str]:
+    """无栏栅时：按行跳过版头噪声，停在首个非版头行（不盲砍字符）。"""
+    n = len(text or "")
+    lines, line_spans = _build_line_index(text)
+    pos = 0
+    for i, ln in enumerate(lines[:30]):
+        if _is_header_noise_line(ln, org_mark=org_mark, title=title):
+            pos = _skip_ws_newlines(text, line_spans[i][1])
+            continue
+        if not (ln or "").strip():
+            pos = _skip_ws_newlines(text, line_spans[i][1])
+            continue
+        return pos, "fallback:skip_header_lines", "行级跳过版头后首段"
+    return min(pos, n), "fallback:skip_header_lines", "行级跳过版头后首段"
 
 
 def _resolve_char_window(
@@ -373,6 +542,7 @@ def _resolve_char_window(
         "end_rule": "",
         "end_label": "",
         "end_candidates": [],
+        "start_fences": [],
     }
     if n == 0:
         diag["start_rule"] = "empty"
@@ -382,96 +552,30 @@ def _resolve_char_window(
         return 0, 0, diag
     header_hi = max(80, min(n, int(n * 0.55) + 40))
 
-    # ---- start ----
+    # ---- start：文首版头栏栅取最靠后 ----
+    fences = _collect_header_fence_ends(
+        text, result, header_hi=header_hi, title=title, recipient=recipient
+    )
+    diag["start_fences"] = [
+        {"pos": p, "rule": r, "label": lb} for p, r, lb in sorted(fences, key=lambda x: x[0])
+    ]
     start: int | None = None
-    # 1) 模型偏移：主送 > 标题 > 令号（命令无主送/标题时用令号）
-    cand_starts: list[tuple[int, int, str]] = []
-    for sp in _items_to_spans(result, "主送机关"):
-        if sp.end <= header_hi:
-            cand_starts.append((0, sp.end, "主送机关"))
-    for sp in _items_to_spans(result, "标题"):
-        if sp.end <= header_hi:
-            cand_starts.append((1, sp.end, "标题"))
-    for sp in _items_to_spans(result, "令号"):
-        if sp.end <= header_hi:
-            cand_starts.append((2, sp.end, "令号"))
-    if cand_starts:
-        cand_starts.sort()
-        # 模型主送 end 常不含冒号 → 正文会以单独「：」起头
-        start = _skip_colon_ws(text, cand_starts[0][1])
-        field_n = cand_starts[0][2]
-        diag["start_rule"] = f"model:{field_n}.end"
-        diag["start_label"] = f"模型偏移：{field_n} 结束处"
+    if fences:
+        start, srule, slabel = max(fences, key=lambda x: x[0])
+        start = _skip_ws_newlines(text, start)
+        start = _skip_colon_ws(text, start)
+        diag["start_rule"] = srule
+        diag["start_label"] = slabel
+    else:
+        mark0 = (_first_text(result, "发文机关标志") or "").strip()
+        tit0 = (title or _first_text(result, "标题") or "").strip()
+        start, srule, slabel = _start_after_header_lines(
+            text, org_mark=mark0, title=tit0
+        )
+        diag["start_rule"] = srule
+        diag["start_label"] = slabel
 
-    # 2) 文首文本锚点
-    if start is None:
-        recip = (recipient or _first_text(result, "主送机关")).strip()
-        tit = (title or _first_text(result, "标题")).strip()
-        if recip:
-            core = recip.rstrip("：:").strip()
-            hit = _find_substr(text, recip, lo=0, hi=header_hi)
-            if hit is None and core:
-                hit = _find_substr(text, core, lo=0, hi=header_hi)
-            if hit is not None:
-                # 若命中的是带冒号版本
-                if text.startswith(recip, hit):
-                    start = _after_field(text, hit, len(recip))
-                else:
-                    start = _after_field(text, hit, len(core))
-                diag["start_rule"] = "anchor:主送机关"
-                diag["start_label"] = "文本锚点：主送机关之后"
-        if start is None and tit:
-            hit = _find_substr(text, tit, lo=0, hi=header_hi)
-            if hit is not None:
-                start = _after_field(text, hit, len(tit))
-                diag["start_rule"] = "anchor:标题"
-                diag["start_label"] = "文本锚点：标题之后"
-
-    # 2b) 命令：令号文本 / 独立「第N号」行之后
-    if start is None:
-        ono = _first_text(result, "令号").strip()
-        if ono:
-            hit = _find_substr(text, ono, lo=0, hi=header_hi)
-            if hit is not None:
-                start = _after_field(text, hit, len(ono))
-                diag["start_rule"] = "anchor:令号"
-                diag["start_label"] = "文本锚点：令号之后"
-        if start is None:
-            lines, line_spans = _build_line_index(text)
-            for i, ln in enumerate(lines[:20]):
-                if not _ORDER_NO_LINE.match((ln or "").strip()):
-                    continue
-                # 行尾之后（跳过换行）即为正文起点
-                start = line_spans[i][1]
-                while start < n and text[start] in "\r\n":
-                    start += 1
-                diag["start_rule"] = "anchor:令号行"
-                diag["start_label"] = "文本锚点：令号行之后"
-                break
-
-    # 3) 启发式：文首「各…：」
-    if start is None:
-        m = _RECIP_TAIL.search(text[:header_hi])
-        if m:
-            start = m.end()
-            diag["start_rule"] = "heuristic:recipient_colon"
-            diag["start_label"] = "启发式：文首「各…：」行末"
-
-    if start is None:
-        # 命令味版头：宁可从标志后第一段起，也不要盲砍 20 字误伤正文
-        mark0 = _first_text(result, "发文机关标志").strip()
-        if _ORDER_MARK_TAIL.search(mark0):
-            hit = _find_substr(text, mark0, lo=0, hi=header_hi)
-            if hit is not None:
-                start = _after_field(text, hit, len(mark0))
-                diag["start_rule"] = "fallback:order_mark"
-                diag["start_label"] = "弱兜底：命令标志之后"
-        if start is None:
-            start = min(20, max(0, n // 10))
-            diag["start_rule"] = "fallback:head_trim"
-            diag["start_label"] = "弱兜底：裁切文首一段"
-
-    start = max(0, min(start, n))
+    start = max(0, min(start if start is not None else 0, n))
     start = _skip_colon_ws(text, start)
 
     # ---- end：起点之后最早的落款/附件/纪要名单类锚点 ----
