@@ -65,18 +65,27 @@ _ORDER_MARK_RE = re.compile(r"^[\u4e00-\u9fa5（）]{4,30}令$")
 # 令号：独立一行「第1号」「第三号」
 _ORDER_NO_RE = re.compile(r"^第\s*[0-9０-９〇一二三四五六七八九十百]{1,6}\s*号$")
 
-# 信函标题行：含「关于」且以「函」结尾（关于××的函 / 关于××的复函）。
-# 批复、通知的标题不以「函」结尾，不会误中；版头机关名不带「关于」。
-_LETTER_TITLE_RE = re.compile(r"^.{4,60}关于.{2,60}的?函$")
+# 信函标题行：关于…的函 / 复函 / 告知函；前面可带发文机关名，也可直接以「关于」开头。
+# 国标与实务均常见「关于××的函」；通知/批复等不以「函」结尾，不会误中。
+_LETTER_TITLE_RE = re.compile(
+    r"^(?:[\u4e00-\u9fa5A-Za-z0-9（）()]{2,40})?关于.{2,80}的?(?:复|告知)?函$"
+)
 
 # 发文字号：有「〔2026〕」样式即视为通用公文，避免把带编号的普通公文误判为命令
 _DOCNO_RE = re.compile(r"[〔\[（(]\s*\d{4}\s*[〕\]）)]")
 
 
+def _strip_bom(text):
+    """去掉 UTF-8 BOM（\\ufeff）。Windows 记事本另存常带，粘在首行会让版头正则失配。"""
+    if not text:
+        return ""
+    return text.lstrip("\ufeff")
+
+
 def _head_lines(text, head_lines=8):
     out = []
-    for ln in text.split("\n"):
-        s = ln.strip()
+    for ln in _strip_bom(text).split("\n"):
+        s = ln.strip().lstrip("\ufeff")
         if s:
             out.append(s)
             if len(out) >= head_lines:
@@ -93,6 +102,7 @@ def detect(text, head_lines=8):
     4. 前若干非空行出现「关于…的函/复函」标题行 => 信函
     5. 其余 => 通用公文
     """
+    text = _strip_bom(text)
     head = _head_lines(text, head_lines)
     for s in head:
         if _TAIL_RE.match(s) and "关于" not in s:

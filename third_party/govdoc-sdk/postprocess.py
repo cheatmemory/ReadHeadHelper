@@ -45,11 +45,11 @@ ORG_TAIL = (r"(人民政府|党委|党组|人大|政协|纪委|监委|法院|检
             r"|(局|厅|委|办|部|署|院|行|社|会|集团|公司|大学|学校|医院|银行"
             r"|督查室|指挥部|领导小组|办公室)([\u4e00-\u9fa5]{0,6})?)")
 
-# 标题行：以"的X"文种结尾
+# 标题行：以"的X"文种结尾（信函含「复函」「告知函」，须写在「函」前）
 TITLE_RE = re.compile(
     r"^[\u4e00-\u9fa5A-Za-z0-9（）()《》、\s]{6,}的"
     r"(?:若干|有关|实施|暂行|试行|补充)?"
-    r"(通知|通报|公告|通告|报告|请示|批复|决定|意见|函|命令|纪要|办法|规划|方案)$"
+    r"(通知|通报|公告|通告|报告|请示|批复|决定|意见|复函|告知函|函|命令|纪要|办法|规划|方案)$"
 )
 # 发文机关标志行：机关名(+文件/函)，不含"关于"、不含文号括号
 MARK_RE = re.compile(r"^[\u4e00-\u9fa5]{2,25}(文件|函)?$")
@@ -414,11 +414,16 @@ def fill_sig(result, lines, a):
     return result
 
 
+def _collapse_wenjian(s):
+    """联合红头 Office 常把「文件」排成「文　件」；中间空白归一掉。"""
+    return re.sub(r"文[\s\u3000]*件", "文件", s or "")
+
+
 def _org_names_from_block(text):
     """从标志/署名文本拆机关名；独立「文件/函」行丢弃，行尾「文件」剥掉。"""
     names = []
     for ln in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        s = _n(ln)
+        s = _collapse_wenjian(_n(ln))
         if not s or s in ("文件", "函"):
             continue
         if s.endswith("文件") and len(s) > 2:
@@ -428,12 +433,27 @@ def _org_names_from_block(text):
     return names
 
 
+def _normalize_mark_wenjian(result):
+    """标志文本里的「文　件」行/后缀改成「文件」，避免被当成第三家机关。"""
+    marks = result.get("发文机关标志") or []
+    if not marks:
+        return result
+    raw = marks[0].get("text") or ""
+    fixed = _collapse_wenjian(raw)
+    if fixed != raw:
+        marks[0] = dict(marks[0])
+        marks[0]["text"] = fixed
+        result["发文机关标志"] = marks
+    return result
+
+
 def link_mark_and_sig(result, text):
     """联合行文：发文机关标志 ↔ 发文机关署名互相补齐。
 
     - 标志已拆出 ≥2 家、署名更少 → 用标志机关写署名
     - 署名 ≥2 家、标志粘成一家或家数不足 → 用署名重建「机关行 + 文件」
     """
+    result = _normalize_mark_wenjian(result)
     marks = result.get("发文机关标志") or []
     sigs = result.get("发文机关署名") or []
     mark_text = marks[0].get("text", "") if marks else ""
@@ -443,8 +463,11 @@ def link_mark_and_sig(result, text):
     mark_orgs = _org_names_from_block(mark_text)
     sig_orgs = _org_names_from_block(sig_text)
 
-    # 标志多行、署名残缺
-    if len(mark_orgs) >= 2 and len(sig_orgs) < len(mark_orgs):
+    # 标志多行、署名残缺（或署名误带了「文件」行）
+    if len(mark_orgs) >= 2 and (
+        len(sig_orgs) < len(mark_orgs)
+        or _collapse_wenjian(_flat(sig_text)).endswith("文件")
+    ):
         result["发文机关署名"] = [{
             "text": "\n".join(mark_orgs), "prob": 1.0, "source": "link"
         }]
@@ -452,7 +475,7 @@ def link_mark_and_sig(result, text):
 
     # 署名多家、标志家数不够或无换行粘连
     if len(sig_orgs) >= 2 and len(mark_orgs) < len(sig_orgs):
-        flat_m = _flat(mark_text).replace("文件", "").replace("函", "")
+        flat_m = _collapse_wenjian(_flat(mark_text)).replace("文件", "").replace("函", "")
         flat_s = "".join(sig_orgs)
         if (not mark_orgs
                 or flat_m == flat_s

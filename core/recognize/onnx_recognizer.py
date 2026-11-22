@@ -145,7 +145,8 @@ class OnnxFieldRecognizer:
         self._last_doc_kind: str | None = None
 
     def recognize(self, text: str, *, with_trace: bool = False) -> ModelOutput:
-        text = text or ""
+        # UTF-8 BOM 会导致版头「…纪要」等行首正则失配；统一剥掉
+        text = (text or "").lstrip("\ufeff")
         dk = self._doc_kind
         kind = dk.detect(text)
         schema = dk.schema_for(kind)
