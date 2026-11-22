@@ -1,6 +1,6 @@
 # 公文排版助手
 
-**版本：V1.1**（界面优化 + 会议纪要公文支持）
+**版本：V1.2**（四文种识别排版 + 正文栏栅切分）
 
 Windows 本地离线桌面程序：粘贴文本 / 上传 docx → 本地 ONNX 字段识别 → 确认要素 → 正文结构 → 按 **GB/T 9704-2012** 生成 docx。确认与结构步骤可借助本机 WPS/Word 做接近一比一的页图预览。
 
@@ -8,8 +8,20 @@ Windows 本地离线桌面程序：粘贴文本 / 上传 docx → 本地 ONNX �
 
 | 版本 | 说明 |
 |------|------|
-| **V1.1**（当前） | 优化 Web 界面；新增**会议纪要**文种（标志、期号、出席/请假/列席；无红线、不选有章/无章） |
+| **V1.2**（当前） | **命令 / 信函** 识别与排版；正文按版头→版记**栏栅切分**（取消文首盲砍）；信函「复函/告知函」标题、联合发文「文　件」、UTF-8 BOM 等识别加固 |
+| V1.1 | 优化 Web 界面；新增**会议纪要**文种（标志、期号、出席/请假/列席；无红线、不选有章/无章） |
 | V1.0 | 通用公文识别与排版、有章/无章落款、正文四层结构、docx 导出 |
+
+## 支持文种
+
+| 文种 | 识别要点 | 排版要点 |
+|------|----------|----------|
+| 通用公文 | 版头「…文件」、发文字号等 | 红线；确认页选有章 / 无章 |
+| 会议纪要 | 版头「…纪要」、期号、出席/请假/列席 | 无红线、不选印章；应用侧可二次认定纪要 |
+| 命令（令） | 标志「…令」、令号、签署职务/姓名 | 绝对定位标志；无主送 |
+| 信函 | 标题「…的函 / 复函 / 告知函」 | 红色双线；标志不加「文件」 |
+
+基线说明见 `docs/baselines/`（纪要 / 命令 / 信函）。
 
 ## 环境
 
@@ -36,11 +48,12 @@ py main.py
 
 - **通用公文**：确认页须选择有章 / 无章落款版式。
 - **会议纪要**：可自动识别或手动切换；须补全纪要标志、正文、出席名单（或确认「本件无」）；不选印章版式、不画红线。
+- **命令 / 信函**：识别命中后自动切文种；确认页可手动改回。
 - 首次点「开始识别」才会加载 ONNX（约数秒）。模型文件不存在、`model.enabled=false` 或加载失败时，识别会返回明确错误。
 
 ## 模型（govdoc-sdk）
 
-SDK 与词表在 `third_party/govdoc-sdk/`（含 `vocab.txt`、接入指南与代码）。  
+SDK 与词表在 `third_party/govdoc-sdk/`（含 `vocab.txt`、接入指南与代码）。当前为 **v5**（通用 / 纪要 / 命令 / 信函）。  
 **`model.onnx`（约 400MB）不纳入 Git**，需自行放到该目录（与 `vocab.txt` 配套）。见仓库 `.gitignore`。
 
 ### 从 GitHub Release 获取模型
@@ -58,7 +71,7 @@ py -c "import hashlib;print(hashlib.md5(open('model.onnx','rb').read()).hexdiges
 说明：代码走 git；大模型只通过 Release 附件分发。以后若更换模型，请在同一 Release 中同时提供配套的 `model.onnx` 与 `vocab.txt`，二者不可只换其一。
 
 - 配置：`config/default.yaml` → `model.enabled` / `onnx_path` / `vocab_path`
-- `enabled: true` 且 `model.onnx`、`vocab.txt` 可读 → `OnnxFieldRecognizer`（SDK v5：`doc_kind` 判文种 → 对应字段表抽取 → `postprocess`；仅通用文另经应用侧 `review`）
+- `enabled: true` 且 `model.onnx`、`vocab.txt` 可读 → `OnnxFieldRecognizer`（`doc_kind` 判文种 → 对应字段表抽取 → `postprocess`；仅通用文另经应用侧 `review`；纪要可由标志/出席等二次认定）
 - 否则 `create_recognizer` / 识别接口直接抛错（不再使用假识别器）
 
 自检 SDK：
@@ -69,7 +82,7 @@ py verify.py
 ```
 
 字段名以 SDK 中文 schema 为准；程序内映射为英文契约 `ModelOutput` 后再进 `LayoutIR`。  
-通用文约 16 字段；纪要约 17 字段（含期号、出席/请假/列席）。抄送可由 SDK 写入确认页；签发人若缺失，在确认页补填。
+**正文不是模型字段**：由 `core/body_structure` 按版头栏栅结束 → 版记栏栅开始切分（主送/标题/令号/期号/文号/标志等取文首最靠后；禁止固定字数盲砍）。
 
 ## 无界面生成示例
 
@@ -88,6 +101,12 @@ py -m pytest tests -q
 
 依赖 ONNX 的端到端用例在缺少 `model.onnx` 时会自动 skip。
 
+可选：对外部 `examples/txt100` 金标集做正文切分评测（需本机有该目录与 `model.onnx`）：
+
+```bash
+py _eval_txt100_body.py
+```
+
 ## 目录
 
 ```
@@ -97,13 +116,13 @@ app/                    桌面壳（WebEngine + bridge + session）
   bridge.py             HTML ↔ Python
   session.py            会话中的 ModelOutput / LayoutIR
 core/recognize/         Onnx 识别 / factory / review
-core/ir/                ModelOutput、LayoutIR、纪要判定与字段
-core/body_structure/    正文抽取与四层编号
+core/ir/                ModelOutput、LayoutIR、纪要/命令/信函
+core/body_structure/    正文栏栅切分与四层编号
 core/layout/            DocxEngine、附件并入、Office 预览
 core/text_extract/      docx → 纯文本
-third_party/govdoc-sdk/ 识别 SDK（model.onnx 需自备）
+third_party/govdoc-sdk/ 识别 SDK v5（model.onnx 需自备）
 fixtures/               排版/测试用样例 JSON 与原文（非识别器）
-docs/baselines/         纪要等基线说明
+docs/baselines/         纪要 / 命令 / 信函基线
 config/default.yaml     配置
 scripts/                无界面示例脚本
 tests/                  pytest
@@ -113,17 +132,17 @@ tests/                  pytest
 
 - 页边距上 37mm、左 28mm；版心约 156×225mm，网格 22×28
 - 红头上边缘距版心顶约 35mm（不是「上边距 37 + 当第一行」）
-- 发文字号下红线约 4mm、2pt、纯红（**纪要不画红线**）
-- 有章 / 无章落款位置分别核对（**纪要不选印章版式**）
+- 发文字号下红线约 4mm、2pt、纯红（**纪要不画红线**；**信函为红色双线**）
+- 有章 / 无章落款位置分别核对（**纪要 / 命令不选印章版式**；信函落款口径见基线）
 - 正式识别必须有 `model.onnx`；缺模型时点「开始识别」应报错而非填入假数据
 
 ## 下一步更新方向
 
 - **优化排版引擎**：加深 GB/T 9704 版式精度（版心、红头几何、落款与版记等）
-- **扩展文种**：在现有通用公文与会议纪要之外，逐步支持**函、命令**及其他公文格式
+- **评测与回归**：扩大金标集覆盖粘连版头、联合发文等边角；巩固正文栏栅与字段后处理
 
 ## 说明
 
 - 本地离线：不联网上传文稿；不生成印章图形；用户侧不导出 PDF（预览可能经本机 Office 临时转 PDF 再出页图）
 - 附件说明行在正文排版；另可上传附件 docx，导出时另页接入原文（「附件N」+ 空行 + 正文，不做国标附件另面精细排版）
-- 当前发布版本为 **V1.1**
+- 当前发布版本为 **V1.2**
