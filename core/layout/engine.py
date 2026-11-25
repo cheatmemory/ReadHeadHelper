@@ -1842,6 +1842,11 @@ class DocxEngine:
         pPr.append(ind)
         run = p.add_run(cc)
         _set_run_font(run, name=fangsong, size_pt=U.PT_4)
+        # 与纪要/通用文相同：钉底浮动表后补 1pt 空段，避免 Word/WPS 多出一页空白
+        sp = doc.add_paragraph()
+        _set_paragraph_spacing(sp, before_pt=0, after_pt=0, line_pt=1.0)
+        _disable_snap_to_grid(sp)
+        _set_run_font(sp.add_run(""), name=fangsong, size_pt=0.5)
 
     def _write_attachment_pages(self, doc: Document, ir: LayoutIR) -> None:
         """附件另页：不做国标标题居中等排版；仅「附件N」+ 空行 + 原文。"""

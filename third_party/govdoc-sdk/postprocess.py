@@ -432,20 +432,47 @@ def fill_sig(result, lines, a):
     collected.reverse()
     body = "\n".join(collected)
     cur = result.get("发文机关署名") or []
-    cur_flat = _flat("".join(_flat(x.get("text", "")) for x in cur))
-    body_flat = _flat(body)
-    # 空、或正则更长/含更多机关行 → 采用正则
-    if (not cur_flat
-            or body_flat == cur_flat
-            or (body_flat != cur_flat and len(body_flat) >= len(cur_flat))):
-        if not cur_flat or body_flat != cur_flat:
-            result["发文机关署名"] = [{"text": body, "prob": 1.0, "source": "regex"}]
+    cur_orgs = []
+    for x in cur:
+        cur_orgs.extend(_org_names_from_block(x.get("text", "")))
+    body_orgs = _org_names_from_block(body)
+    cur_u = _uniq_org_names(cur_orgs)
+    body_u = _uniq_org_names(body_orgs)
+    cur_flat = "".join(_flat(x) for x in cur_orgs)
+    body_flat = "".join(_flat(x) for x in body_orgs)
+    # 模型把版头标志+落款各抽一次同名 → 拼接更长，仍应采用落款正则
+    dup_model = len(cur_orgs) > len(cur_u)
+    prefer = (
+        not cur_flat
+        or body_flat == cur_flat
+        or (body_flat != cur_flat and len(body_flat) >= len(cur_flat))
+        or (dup_model and body_u and {_flat(x) for x in body_u} == {_flat(x) for x in cur_u})
+    )
+    if prefer and body and (not cur_flat or body_flat != cur_flat or dup_model):
+        result["发文机关署名"] = [{
+            "text": "\n".join(body_u) if body_u else body,
+            "prob": 1.0,
+            "source": "regex",
+        }]
     return result
 
 
 def _collapse_wenjian(s):
     """联合红头 Office 常把「文件」排成「文　件」；中间空白归一掉。"""
     return re.sub(r"文[\s\u3000]*件", "文件", s or "")
+
+
+def _uniq_org_names(names):
+    """去重保序（同名版头+落款不算联合行文两家）。"""
+    seen = set()
+    out = []
+    for n in names or []:
+        f = _flat(n)
+        if not f or f in seen:
+            continue
+        seen.add(f)
+        out.append(n)
+    return out
 
 
 def _org_names_from_block(text):
@@ -469,6 +496,12 @@ def _org_names_from_block(text):
     return names
 
 
+def _looks_like_letter_fields(result) -> bool:
+    title = _flat(((result.get("标题") or [{}])[0].get("text")) or "")
+    docno = _flat(((result.get("发文字号") or [{}])[0].get("text")) or "")
+    return title.endswith("函") or ("函" in docno and ("〔" in docno or "[" in docno))
+
+
 def _normalize_mark_wenjian(result):
     """标志文本里的「文　件」行/后缀改成「文件」，避免被当成第三家机关。"""
     marks = result.get("发文机关标志") or []
@@ -488,6 +521,7 @@ def link_mark_and_sig(result, text):
 
     - 标志已拆出 ≥2 家、署名更少 → 用标志机关写署名
     - 署名 ≥2 家、标志粘成一家或家数不足 → 用署名重建「机关行 + 文件」
+    同名重复（版头+落款）去重后再判断「多家」，避免信函单机关被拼成两行。
     """
     result = _normalize_mark_wenjian(result)
     marks = result.get("发文机关标志") or []
@@ -496,8 +530,9 @@ def link_mark_and_sig(result, text):
     sig_text = "\n".join(
         str(x.get("text") or "").strip() for x in sigs if str(x.get("text") or "").strip()
     )
-    mark_orgs = _org_names_from_block(mark_text)
-    sig_orgs = _org_names_from_block(sig_text)
+    mark_orgs = _uniq_org_names(_org_names_from_block(mark_text))
+    sig_orgs = _uniq_org_names(_org_names_from_block(sig_text))
+    letterish = _looks_like_letter_fields(result)
 
     # 标志多行、署名残缺（或署名误带了「文件」行）
     if len(mark_orgs) >= 2 and (
@@ -512,15 +547,77 @@ def link_mark_and_sig(result, text):
     # 署名多家、标志家数不够或无换行粘连
     if len(sig_orgs) >= 2 and len(mark_orgs) < len(sig_orgs):
         flat_m = _collapse_wenjian(_flat(mark_text)).replace("文件", "").replace("函", "")
-        flat_s = "".join(sig_orgs)
+        flat_s = "".join(_flat(x) for x in sig_orgs)
         if (not mark_orgs
                 or flat_m == flat_s
                 or (flat_m and (flat_s in flat_m or flat_m in flat_s))):
+            # 信函标志不加「文件」
+            mark_body = "\n".join(sig_orgs) + ("" if letterish else "\n文件")
             result["发文机关标志"] = [{
-                "text": "\n".join(sig_orgs) + "\n文件",
+                "text": mark_body,
                 "prob": 1.0,
                 "source": "link",
             }]
+    return result
+
+
+def scrub_signature_mark_dupes(result, text):
+    """清掉版头机关被误标为署名、以及标志里同名重复 / 信函误加「文件」。"""
+    sigs = list(result.get("发文机关署名") or [])
+    if sigs:
+        header_cut = None
+        for key in ("标题", "发文字号"):
+            for x in result.get(key) or []:
+                en = x.get("end")
+                if en is not None:
+                    header_cut = max(header_cut or 0, int(en))
+        if header_cut is not None and len(sigs) >= 2:
+            foot = [x for x in sigs if x.get("start") is None or int(x.get("start")) >= header_cut]
+            if foot:
+                sigs = foot
+        # 按机关名去重，保留靠后（落款）的一条
+        kept_rev = []
+        seen = set()
+        for x in reversed(sigs):
+            names = _uniq_org_names(_org_names_from_block(x.get("text") or ""))
+            if not names:
+                continue
+            key = "".join(_flat(n) for n in names)
+            if key in seen or (len(names) == 1 and _flat(names[0]) in seen):
+                continue
+            seen.add(key)
+            for n in names:
+                seen.add(_flat(n))
+            raw = str(x.get("text") or "").strip()
+            want = "\n".join(names)
+            if want != raw:
+                x = dict(x)
+                x["text"] = want
+                x["source"] = "scrub"
+            kept_rev.append(x)
+        result["发文机关署名"] = list(reversed(kept_rev))
+
+    marks = result.get("发文机关标志") or []
+    if marks:
+        raw = marks[0].get("text") or ""
+        orgs = _uniq_org_names(_org_names_from_block(raw))
+        letterish = _looks_like_letter_fields(result)
+        collapsed = _collapse_wenjian(raw)
+        had_file = "文件" in _flat(collapsed)
+        raw_names = _org_names_from_block(raw)
+        if orgs and (len(raw_names) > len(orgs) or (letterish and had_file)):
+            if letterish:
+                want = "\n".join(orgs) if len(orgs) > 1 else orgs[0]
+            elif len(orgs) >= 2:
+                want = "\n".join(orgs) + ("\n文件" if had_file else "")
+            else:
+                # 单机关通知类：保留「××文件」单行形态
+                want = orgs[0] + ("文件" if had_file and not orgs[0].endswith("文件") else "")
+            if _flat(want) != _flat(raw):
+                marks[0] = dict(marks[0])
+                marks[0]["text"] = want
+                marks[0]["source"] = "scrub"
+                result["发文机关标志"] = marks
     return result
 
 
@@ -1545,6 +1642,7 @@ def postprocess(result, text):
     result = fill_order_fields(result, text)  # 命令：令号/签署等（无换行时模型常漏）
     result = repair_signer(result, text)
     result = link_mark_and_sig(result, text)  # 联合行文：标志 ↔ 署名互相补齐
+    result = scrub_signature_mark_dupes(result, text)  # 版头误标署名 / 同名重复
     result = scrub_attachment_vs_signature(result)  # 署名补齐后再清附件粘连
     result = filter_attachment_captions(result, text)  # 再按块范围收紧一次
     # 附件说明：一行里用顿号列多个附件 => 拆成多条（每段 >= 6 字才拆，避免误拆机关名）

@@ -210,6 +210,19 @@ def test_letter_no_banji_separator(tmp_path):
             }
 
 
+def test_letter_cc_banji_1pt_tail(tmp_path):
+    """有抄送时钉底浮动表后须有 1pt 空段，否则 Word/WPS 常多出一页空白。"""
+    ir = _minimal_letter(cc_recipients="南昌市轨道交通集团有限公司")
+    out = tmp_path / "letter_cc_tail.docx"
+    DocxEngine().render(ir, out)
+    doc = Document(out)
+    last = doc.paragraphs[-1]
+    assert (last.text or "") == ""
+    sp = last._p.find(qn("w:pPr"))
+    spacing = sp.find(qn("w:spacing")) if sp is not None else None
+    assert spacing is not None and spacing.get(qn("w:line")) == "20"
+
+
 def test_letter_double_line_geometry(tmp_path):
     ir = _minimal_letter()
     out = tmp_path / "letter_lines.docx"
