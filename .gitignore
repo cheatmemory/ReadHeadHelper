@@ -27,3 +27,6 @@ third_party/govdoc-sdk/model.onnx
 .vscode/
 *.swp
 *~
+
+# 本地交接说明（不入库；需单独拷给接手方）
+AGENTS.md
