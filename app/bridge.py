@@ -19,7 +19,12 @@ from core.body_structure.parser import renumber_blocks
 from core.config_loader import load_config, project_root
 from core.ir.builder import split_names
 from core.ir.minutes import format_issue_no, normalize_name_list
-from core.ir.order import format_order_no, normalize_order_signers
+from core.ir.order import (
+    compose_order_mark,
+    format_order_no,
+    normalize_order_signers,
+    parse_order_org_marks,
+)
 from core.ir.schema import AttachmentDocx, BodyBlock, DocKind, LayoutIR, ModelOutput, SealMode
 from core.layout import DocxEngine
 from core.layout.office_preview import render_docx_preview
@@ -71,10 +76,18 @@ class BackendBridge(QObject):
                 ),
                 "urgency": ir.urgency,
                 "issuer_sign": "、".join(ir.signers),
-                "org_mark": "、".join(ir.org_marks),
+                "org_mark": (
+                    compose_order_mark(
+                        list(ir.org_marks or []),
+                        (ir.order_mark_suffix or "令"),
+                    )
+                    if ir.is_order()
+                    else "、".join(ir.org_marks)
+                ),
                 "doc_number": ir.doc_number,
                 "issue_no": format_issue_no(ir.issue_no) or ir.issue_no,
                 "order_no": format_order_no(ir.order_no) or ir.order_no,
+                "order_mark_suffix": ir.order_mark_suffix or "",
                 "title": ir.title,
                 "recipient": ir.recipient,
                 "attachment_caption": ir.attachment_caption,
@@ -448,9 +461,19 @@ class BackendBridge(QObject):
         ir.copy_number = str(fields.get("copy_number") or "").strip()
         ir.urgency = str(fields.get("urgency") or "").strip()
         org_raw = str(fields.get("org_mark") or "").strip()
-        # 纪要/命令标志通常整串，勿按顿号拆成多标志
-        if ir.is_minutes() or ir.is_order():
+        # 纪要标志通常整串勿拆；命令按顿号/空格拆多机关并抽令/命令尾缀
+        if ir.is_minutes():
             ir.org_marks = [org_raw] if org_raw else []
+        elif ir.is_order():
+            hint = str(fields.get("order_mark_suffix") or "").strip()
+            names, suffix = parse_order_org_marks(
+                org_raw,
+                default_suffix=hint if hint in {"令", "命令"} else "令",
+            )
+            if hint in {"令", "命令"}:
+                suffix = hint
+            ir.org_marks = names
+            ir.order_mark_suffix = suffix
         else:
             ir.org_marks = split_names(org_raw)
         if ir.is_order():
@@ -470,6 +493,7 @@ class BackendBridge(QObject):
             ir.signers = split_names(str(fields.get("issuer_sign") or ""))
             ir.doc_number = str(fields.get("doc_number") or "").strip()
             ir.order_no = ""
+            ir.order_mark_suffix = ""
             ir.title = str(fields.get("title") or "").strip()
             ir.org_signature = str(fields.get("org_signature") or "").strip()
         ir.issue_no = format_issue_no(str(fields.get("issue_no") or ""))

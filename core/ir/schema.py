@@ -176,8 +176,9 @@ class LayoutIR:
     liexi: str = ""
     attendance_absent_confirmed: bool = False
 
-    # 命令（令）扩展：令号；signers 存职务（不含姓名）
+    # 命令（令）扩展：令号；signers 存职务（不含姓名）；标志尾缀令/命令
     order_no: str = ""
+    order_mark_suffix: str = ""
 
     # 选填确认（字段名 → 是否确认无此项）
     absent_flags: dict[str, bool] = field(default_factory=dict)
@@ -205,11 +206,10 @@ class LayoutIR:
             return missing
 
         if self.is_order():
-            from core.ir.order import format_order_no, mark_is_order
+            from core.ir.order import format_order_no, order_mark_ok
 
             missing = []
-            mark = self.primary_org_mark().strip()
-            if not mark or not mark_is_order(mark):
+            if not order_mark_ok(self):
                 missing.append("发文机关标志")
             if not format_order_no(self.order_no):
                 missing.append("令号")
