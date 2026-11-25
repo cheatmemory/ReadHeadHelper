@@ -25,6 +25,7 @@ def _enable_dpi():
 
 def main():
     _enable_dpi()
+    from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
     from PySide6.QtCore import Qt
     from app.web_window import WebMainWindow
@@ -32,6 +33,10 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("公文排版助手")
     app.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
+    for candidate in (ROOT / "assets" / "app.ico", ROOT / "assets" / "app-icon-256.png"):
+        if candidate.exists():
+            app.setWindowIcon(QIcon(str(candidate)))
+            break
     # 系统 UI 字体，避免模糊光栅
     font = app.font()
     font.setFamily("Microsoft YaHei UI")

@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QUrl
+from PySide6.QtGui import QIcon
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -17,6 +18,11 @@ class WebMainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("公文排版助手")
         self.resize(1280, 860)
+        root = Path(__file__).resolve().parents[1]
+        for candidate in (root / "assets" / "app.ico", root / "assets" / "app-icon-256.png"):
+            if candidate.exists():
+                self.setWindowIcon(QIcon(str(candidate)))
+                break
 
         self.view = QWebEngineView(self)
         self.setCentralWidget(self.view)

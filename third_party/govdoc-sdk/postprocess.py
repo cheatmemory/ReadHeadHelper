@@ -217,13 +217,24 @@ def fill_mark(result, lines, a):
         if not cur or _flat(cur[0]["text"]) != want:
             result["发文机关标志"] = [{"text": want, "prob": 1.0, "source": "regex"}]
         return result
-    if result.get("发文机关标志"):
+    cur = result.get("发文机关标志")
+    cur_flat = _flat((cur[0].get("text") if cur else "") or "")
+    # 已有完整标志（带文件/函/令/纪要）则不动；「国务院」这类截断仍可被版头行升级
+    if cur_flat.endswith(("文件", "函", "命令", "令", "纪要")):
         return result
     for i, raw, nl in _header_zone(lines, a):
         if (MARK_RE.match(nl) and "关于" not in nl and len(nl) <= 25
                 and not DOCID_RE.match(nl) and not COPYNO_RE.match(nl)
                 and not SEC_RE.match(nl) and not URG_RE.match(nl)
                 and re.match(r"^[\u4e00-\u9fa5]{2,20}" + ORG_TAIL, nl)):
+            # 模型截成机关名、版头实为「机关名+文件」→ 用整行覆盖
+            if cur_flat and not (
+                nl == cur_flat
+                or (nl.startswith(cur_flat) and nl.endswith("文件") and len(nl) <= len(cur_flat) + 2)
+            ):
+                continue
+            if cur and nl == cur_flat:
+                return result
             result["发文机关标志"] = [{"text": raw.strip(), "prob": 1.0, "source": "regex"}]
             break
     return result
@@ -1690,15 +1701,42 @@ def postprocess(result, text):
                 kept.append(x)
             if kept:
                 result[f] = kept
-    # 「XX文件」粘连：版头与紧急程度后面紧跟「文件」，而值本身没带 => 补回
+    # 「XX文件」粘连补回：① span 后紧跟「文件」；② 版头独立行就是「XX文件」
+    # （模型常把「国务院文件」截成「国务院」，偏移还可能对到落款同名机关）
     for f in ("发文机关标志", "紧急程度"):
-        for x in result.get(f, []):
-            st, en, tx = x.get("start"), x.get("end"), x.get("text", "")
-            if st is None or en is None or not tx:
+        for x in result.get(f, []) or []:
+            tx = str(x.get("text") or "").strip()
+            if not tx or tx.endswith("文件"):
                 continue
-            if not tx.endswith("文件") and text[en:en + 2] == "文件":
+            en = x.get("end")
+            if en is not None and (text or "")[en:en + 2] == "文件":
                 x["text"] = tx + "文件"
-                x["end"] = en + 2
+                x["end"] = int(en) + 2
+                continue
+            if f != "发文机关标志":
+                continue
+            if _looks_like_letter_fields(result):
+                continue
+            flat = _flat(tx)
+            if not flat or flat.endswith(("函", "命令", "令", "纪要")):
+                continue
+            for ln in (text or "").split("\n")[:16]:
+                raw_ln = ln.strip()
+                nl = _n(raw_ln)
+                if not nl or "关于" in nl or DOCID_RE.match(nl):
+                    continue
+                if nl == flat + "文件" or (
+                    nl.startswith(flat) and nl.endswith("文件")
+                    and MARK_RE.match(nl) and len(nl) <= len(flat) + 2
+                ):
+                    x["text"] = raw_ln if raw_ln.endswith("文件") else (tx + "文件")
+                    pos = (text or "").find(raw_ln)
+                    if pos >= 0:
+                        x["start"] = pos
+                        x["end"] = pos + len(raw_ln)
+                    if not x.get("source"):
+                        x["source"] = "regex"
+                    break
     return result
 
 

@@ -62,25 +62,6 @@
       cursor: pointer;
     }
 
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 5px 11px;
-      border-radius: 999px;
-      background: var(--ok-soft);
-      border: 1px solid #99f6e4;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--ok);
-      letter-spacing: 0.01em;
-    }
-    .badge i {
-      width: 6px; height: 6px; border-radius: 50%;
-      background: var(--ok); display: inline-block;
-      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.15);
-    }
-
     .app {
       background: transparent;
       height: 100%;
@@ -109,19 +90,14 @@
     }
     .app-mark {
       width: 32px; height: 32px; border-radius: 9px;
-      background: linear-gradient(145deg, #d13a44, var(--red-deep));
-      display: grid; place-items: center;
-      color: #fff; font-size: 15px; font-weight: 700;
-      font-family: var(--font-doc);
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.22), 0 6px 14px rgba(143, 26, 34, 0.22);
       flex: 0 0 auto;
+      overflow: hidden;
+      box-shadow: 0 6px 14px rgba(143, 26, 34, 0.22);
     }
+    .app-mark svg { display: block; width: 100%; height: 100%; }
     .app-title {
       font-size: 16px; font-weight: 700; letter-spacing: 0.02em;
       display: block; line-height: 1.2;
-    }
-    .app-sub {
-      font-size: 12px; color: var(--muted); display: block; margin-top: 3px;
     }
 
     .stepper {
@@ -699,9 +675,10 @@
       box-shadow: 0 0 0 3px rgba(180, 35, 44, 0.12);
     }
     .seal-option strong {
-      display: block; font-size: 13px; margin-bottom: 4px;
+      display: block; font-size: 13px;
     }
     .seal-option span {
+      display: block; margin-top: 4px;
       font-size: 12px; color: var(--muted); line-height: 1.45;
     }
 
@@ -717,6 +694,52 @@
       background: #fef2f2; border-color: #fecaca; color: #991b1b;
     }
     .alert svg { width: 16px; height: 16px; flex: 0 0 auto; margin-top: 1px; }
+
+    .notice-check {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      padding: 14px 16px;
+      border-radius: var(--radius-lg);
+      background: linear-gradient(135deg, #fff8f8 0%, var(--red-soft) 100%);
+      border: 1px solid #f0d0d2;
+      margin-bottom: 14px;
+    }
+    .notice-check-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      background: #fff;
+      border: 1px solid #f0c4c7;
+      color: var(--red);
+      box-shadow: 0 1px 2px rgba(180, 35, 44, 0.08);
+    }
+    .notice-check-icon svg {
+      width: 18px;
+      height: 18px;
+    }
+    .notice-check-body {
+      min-width: 0;
+      display: grid;
+      gap: 4px;
+    }
+    .notice-check-title {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      color: var(--red-deep);
+      line-height: 1.35;
+    }
+    .notice-check-body p {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--ink-soft);
+    }
 
     /* Body structure */
     .body-layout {
@@ -927,12 +950,14 @@
     }
     .footer-left {
       display: flex; align-items: center; gap: 10px;
-      font-size: 12px; color: var(--muted);
+      font-size: 14px; color: var(--muted);
       min-width: 0;
     }
     #step-label {
       color: var(--ink-soft);
-      font-weight: 620;
+      font-size: 14px;
+      font-weight: 650;
+      letter-spacing: 0.01em;
     }
     .footer-right { display: flex; gap: 8px; flex: 0 0 auto; }
     .footer-right .btn.primary {
@@ -1030,13 +1055,26 @@
   <div class="app" role="application" aria-label="公文排版助手">
     <header class="topbar">
       <div class="brand">
-        <div class="app-mark" aria-hidden="true">公</div>
+        <div class="app-mark" aria-hidden="true">
+          <svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="am-bg" x1="64" y1="8" x2="64" y2="120" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#D13A44"/><stop offset="1" stop-color="#8F1A22"/>
+              </linearGradient>
+            </defs>
+            <rect width="128" height="128" rx="28" fill="url(#am-bg)"/>
+            <path fill="#fff" d="M34 26h48l18 18v58a10 10 0 0 1-10 10H34a10 10 0 0 1-10-10V36a10 10 0 0 1 10-10z"/>
+            <path fill="#E2E8F0" d="M82 26v14a4 4 0 0 0 4 4h14L82 26z"/>
+            <path fill="#B4232C" d="M42 48h40a3 3 0 1 1 0 6H42a3 3 0 1 1 0-6z"/>
+            <rect x="42" y="64" width="36" height="4.5" rx="2.25" fill="#94A3B8"/>
+            <rect x="42" y="76" width="36" height="4.5" rx="2.25" fill="#94A3B8"/>
+            <rect x="42" y="88" width="24" height="4.5" rx="2.25" fill="#94A3B8"/>
+          </svg>
+        </div>
         <div>
           <span class="app-title">公文排版助手</span>
-          <span class="app-sub" id="app-sub">本地离线 · 正在连接后端…</span>
         </div>
       </div>
-      <div class="badge"><i></i> 纯本地 · GB/T 9704-2012</div>
     </header>
 
     <nav class="stepper" aria-label="流程步骤">
@@ -1049,8 +1087,6 @@
     <div class="footerbar" role="navigation" aria-label="步骤操作">
       <div class="footer-left">
         <span id="step-label">步骤 1 / 4 · 导入文稿</span>
-        <span>·</span>
-        <span id="recognizer-label">识别：连接中…</span>
       </div>
       <div class="footer-right">
         <button class="btn" type="button" id="btn-back" disabled>上一步</button>
@@ -1065,7 +1101,6 @@
             <div class="pane-head">
               <div>
                 <h1>导入文稿</h1>
-                <p>拖入 Word，或点选文件；只抽取纯文本，不改原件。</p>
               </div>
             </div>
             <div class="pane-import-body">
@@ -1074,13 +1109,11 @@
                   <svg width="24" height="24" viewBox="0 0 256 256" fill="currentColor"><path d="M224,144v64a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V144a8,8,0,0,1,16,0v56H208V144a8,8,0,0,1,16,0ZM93.66,77.66,120,51.31V144a8,8,0,0,0,16,0V51.31l26.34,26.35a8,8,0,0,0,11.32-11.32l-40-40a8,8,0,0,0-11.32,0l-40,40A8,8,0,0,0,93.66,77.66Z"/></svg>
                 </div>
                 <h2>拖入或选择 Word 文件</h2>
-                <p>支持 .docx，仅抽取纯文本后进入识别。</p>
                 <button class="btn" type="button" id="btn-pick">选择文件</button>
                 <input type="file" id="file-input" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden />
               </div>
               <div class="meta-row">
                 <span class="chip" id="char-count">0 字</span>
-                <span class="chip ok" id="import-recognizer-chip">识别器：—</span>
               </div>
             </div>
           </div>
@@ -1089,7 +1122,6 @@
             <div class="pane-head">
               <div>
                 <h1>粘贴文本</h1>
-                <p>也可直接粘贴全文，与左侧导入走同一识别链路。</p>
               </div>
             </div>
             <div class="pane-import-body">
@@ -1107,7 +1139,6 @@
             <div class="pane-head">
               <div>
                 <h1>确认要素</h1>
-                <p>核对识别结果，缺项点上方标签跳转；右侧实时预览。</p>
               </div>
               <div class="toolbar">
                 <span class="chip warn" id="req-status">待确认</span>
@@ -1116,13 +1147,12 @@
 
             <div class="alert" id="confirm-alert">
               <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M236.8,188.09,149.35,36.22a24.76,24.76,0,0,0-42.7,0L19.2,188.09a23.51,23.51,0,0,0,0,23.72A24.34,24.34,0,0,0,40.55,224h174.9a24.34,24.34,0,0,0,21.33-12.19A23.51,23.51,0,0,0,236.8,188.09ZM120,104a8,8,0,0,1,16,0v40a8,8,0,0,1-16,0Zm8,88a12,12,0,1,1,12-12A12,12,0,0,1,128,192Z"/></svg>
-              <div id="confirm-alert-text">请先选择<strong>有章 / 无章版式</strong>。未选择时无法进入导出。</div>
+              <div id="confirm-alert-text">请选择<strong>有章 / 无章版式</strong></div>
             </div>
 
             <div class="section" id="missing-required-section" hidden>
               <div class="section-h">
                 <h2><span class="dot"></span>待补必填</h2>
-                <span class="hint">点击跳转到对应项</span>
               </div>
               <div id="missing-required-nav" role="list"></div>
             </div>
@@ -1172,7 +1202,6 @@
             <div class="section">
               <div class="section-h">
                 <h2><span class="dot"></span>版头</h2>
-                <span class="hint">选填项可点「无此项」</span>
               </div>
               <div class="grid-2">
                 <div class="field is-none">
@@ -1201,13 +1230,13 @@
                     <label for="f-signers">签发人 <span class="tag-opt">选填</span></label>
                     <button type="button" class="none-toggle" aria-pressed="true" aria-controls="f-signers">无此项</button>
                   </div>
-                  <input id="f-signers" value="" placeholder="上行文；多人顿号分隔，按机关顺序，每行两人自动排" disabled />
+                  <input id="f-signers" value="" placeholder="姓名，多人用顿号" disabled />
                 </div>
                 <div class="field full" data-req-key="org_mark">
                   <div class="field-head">
                     <label for="f-org"><span id="label-org">发文机关标志</span><span class="req" id="req-org">*</span></label>
                   </div>
-                  <input id="f-org" value="" placeholder="主办在前；联合用顿号，如 甲局、乙局" />
+                  <input id="f-org" value="" placeholder="发文机关标志" />
                 </div>
                 <div class="field full" data-req-key="doc_number" id="field-doc-number">
                   <div class="field-head">
@@ -1220,13 +1249,13 @@
                     <label for="f-issue">期号 <span class="tag-opt">选填</span></label>
                     <button type="button" class="none-toggle" aria-pressed="true" aria-controls="f-issue">无此项</button>
                   </div>
-                  <input id="f-issue" value="" placeholder="如 第18期（无空格）" disabled />
+                  <input id="f-issue" value="" placeholder="如 第18期" disabled />
                 </div>
                 <div class="field full" id="field-order-no" data-req-key="order_no" hidden>
                   <div class="field-head">
                     <label for="f-order">令号<span class="req">*</span></label>
                   </div>
-                  <input id="f-order" value="" placeholder="如 第1号（无空格）" />
+                  <input id="f-order" value="" placeholder="如 第1号" />
                 </div>
               </div>
             </div>
@@ -1234,7 +1263,6 @@
             <div class="section">
               <div class="section-h">
                 <h2><span class="dot"></span>主体</h2>
-                <span class="hint">标题、主送与附件说明</span>
               </div>
               <div class="grid-2">
                 <div class="field full" data-req-key="title" id="field-title">
@@ -1259,7 +1287,6 @@
                     <button type="button" class="none-toggle" aria-pressed="false" aria-controls="f-attach">无此项</button>
                   </div>
                   <input id="f-attach" value="" placeholder="附件说明" />
-                  <span class="hint">正文下「附件：」说明行；附件正文请在下方上传</span>
                 </div>
                 <div class="field full" id="field-attach-files">
                   <div class="field-head">
@@ -1268,7 +1295,6 @@
                   </div>
                   <input type="file" id="attach-file-input" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple hidden />
                   <div class="attach-file-list" id="attach-file-list"></div>
-                  <span class="hint">每个附件另起一页：左上角「附件N」+ 空一行 + 原文（含表格/图表），不做国标附件排版</span>
                 </div>
               </div>
             </div>
@@ -1276,14 +1302,13 @@
             <div class="section" id="section-order-signers" hidden>
               <div class="section-h">
                 <h2><span class="dot"></span>签发人职务</h2>
-                <span class="hint">只填职务（如「市长」）；姓名由签名章体现；联合多机关用顿号，顺序即排版顺序</span>
               </div>
               <div class="grid-2">
                 <div class="field full" data-req-key="signer_titles" id="field-order-titles">
                   <div class="field-head">
                     <label for="f-order-titles">职务<span class="req">*</span></label>
                   </div>
-                  <input id="f-order-titles" value="" placeholder="如 市长（联合：市长、区长）" />
+                  <input id="f-order-titles" value="" placeholder="如 市长" />
                 </div>
               </div>
             </div>
@@ -1291,7 +1316,6 @@
             <div class="section" id="section-minutes-lists" hidden>
               <div class="section-h">
                 <h2><span class="dot"></span>出席 / 请假 / 列席</h2>
-                <span class="hint">多人用顿号；出席默认可勾选「本件无」</span>
               </div>
               <div class="grid-2">
                 <div class="field full" data-req-key="attendance" id="field-attendance">
@@ -1321,14 +1345,13 @@
             <div class="section">
               <div class="section-h">
                 <h2><span class="dot"></span>落款与版记</h2>
-                <span class="hint">署名、日期与印发信息</span>
               </div>
               <div class="grid-2">
                 <div class="field" data-req-key="org_signature" id="field-org-signature">
                   <div class="field-head">
                     <label for="f-orgsig">发文机关署名<span class="req" id="req-orgsig">*</span> <span class="tag-opt" id="opt-orgsig" hidden>选填</span></label>
                   </div>
-                  <input id="f-orgsig" value="" placeholder="主办在前；联合顿号或换行，可与红头机关一致" />
+                  <input id="f-orgsig" value="" placeholder="发文机关署名" />
                 </div>
                 <div class="field" data-req-key="date" id="field-date">
                   <div class="field-head">
@@ -1348,13 +1371,13 @@
                     <label for="f-cc">抄送 <span class="tag-opt">选填</span></label>
                     <button type="button" class="none-toggle" aria-pressed="true" aria-controls="f-cc">无此项</button>
                   </div>
-                  <input id="f-cc" value="" placeholder="模型不含此字段，需人工填写" disabled />
+                  <input id="f-cc" value="" placeholder="抄送机关" disabled />
                 </div>
                 <div class="field" data-req-key="print_org" id="field-print-org">
                   <div class="field-head">
                     <label for="f-print-org">印发机关<span class="req" id="req-print-org">*</span> <span class="tag-opt" id="opt-print-org" hidden>选填</span></label>
                   </div>
-                  <input id="f-print-org" value="" placeholder="惯例写主办机关办公厅（室）" />
+                  <input id="f-print-org" value="" placeholder="印发机关" />
                 </div>
                 <div class="field" data-req-key="print_date" id="field-print-date">
                   <div class="field-head">
@@ -1371,14 +1394,14 @@
               <div class="office-preview-toolbar">
                 <div class="hint">
                   <span class="mini-spin" aria-hidden="true"></span>
-                  <span class="office-preview-status-text">后台预览 · 改完自动更新</span>
+                  <span class="office-preview-status-text">预览</span>
                 </div>
                 <button class="btn ghost btn-refresh-preview" type="button">刷新预览</button>
               </div>
               <div class="office-preview-scroll">
                 <div class="office-preview-pages">
                   <div class="office-preview-empty is-wait">
-                    <strong>等待预览条件</strong><br />通用文请先选有章/无章；纪要/命令请补全对应必填
+                    <strong>暂无预览</strong>
                   </div>
                 </div>
               </div>
@@ -1392,7 +1415,6 @@
             <div class="pane-head">
               <div>
                 <h1>正文结构</h1>
-                <p>按国标四层切分；左侧改层级，右侧为实时预览。</p>
               </div>
               <div class="toolbar">
                 <span class="chip ok">已识别层次</span>
@@ -1434,14 +1456,14 @@
               <div class="office-preview-toolbar">
                 <div class="hint">
                   <span class="mini-spin" aria-hidden="true"></span>
-                  <span class="office-preview-status-text">后台预览 · 改完自动更新</span>
+                  <span class="office-preview-status-text">预览</span>
                 </div>
                 <button class="btn ghost btn-refresh-preview" type="button">刷新预览</button>
               </div>
               <div class="office-preview-scroll">
                 <div class="office-preview-pages">
                   <div class="office-preview-empty">
-                    <strong>尚无预览</strong><br />结构改动后将在后台刷新预览。
+                    <strong>暂无预览</strong>
                   </div>
                 </div>
               </div>
@@ -1455,13 +1477,22 @@
             <div class="pane-head">
               <div>
                 <h1>生成导出</h1>
-                <p>按 LayoutIR 生成 docx；右侧为 WPS/Word 渲染的接近一比一预览。</p>
+              </div>
+            </div>
+
+            <div class="notice-check" role="note">
+              <div class="notice-check-icon" aria-hidden="true">
+                <svg viewBox="0 0 256 256" fill="currentColor"><path d="M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"/></svg>
+              </div>
+              <div class="notice-check-body">
+                <p class="notice-check-title">导出前请再核对一遍</p>
+                <p>识别结果仅供辅助参考，字段与版式偶有偏差。请对照原文与右侧预览确认无误后，再生成文稿。</p>
               </div>
             </div>
 
             <div class="alert" id="export-alert" style="display:none">
               <svg viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-8,56a8,8,0,0,1,16,0v40a8,8,0,0,1-16,0Zm8,88a12,12,0,1,1,12-12A12,12,0,0,1,128,184Z"/></svg>
-              <div id="export-alert-text">尚有阻断项，无法导出。</div>
+              <div id="export-alert-text">尚有阻断项，无法导出</div>
             </div>
 
             <div class="export-actions">
@@ -1493,14 +1524,14 @@
               <div class="office-preview-toolbar">
                 <div class="hint">
                   <span class="mini-spin" aria-hidden="true"></span>
-                  <span class="office-preview-status-text">后台预览 · 未改动则用缓存</span>
+                  <span class="office-preview-status-text">预览</span>
                 </div>
                 <button class="btn ghost btn-refresh-preview" type="button">刷新预览</button>
               </div>
               <div class="office-preview-scroll">
                 <div class="office-preview-pages">
                   <div class="office-preview-empty">
-                    <strong>尚无预览</strong><br />通用文请先选有章/无章；纪要补全标志、正文与出席（或本件无）后将自动生成。
+                    <strong>暂无预览</strong>
                   </div>
                 </div>
               </div>
@@ -1514,8 +1545,8 @@
   <div class="busy-overlay" id="busy-overlay" aria-hidden="true">
     <div class="busy-card" role="status" aria-live="assertive" aria-busy="true">
       <div class="busy-spinner" aria-hidden="true"></div>
-      <strong id="busy-title">识别中，请稍候</strong>
-      <p id="busy-desc">复杂文稿可能需要数秒，界面仍可保持响应</p>
+      <strong id="busy-title">识别中</strong>
+      <p id="busy-desc">请稍候</p>
     </div>
   </div>
 
@@ -1748,11 +1779,12 @@
     function renderOfficePreviewEmpty(kind, title, detail) {
       const wraps = document.querySelectorAll(".office-preview-pages");
       const cls = kind === "error" ? "is-error" : (kind === "loading" ? "is-loading" : "is-wait");
+      const extra = detail ? `<br />${detail}` : "";
       wraps.forEach((wrap) => {
         wrap.classList.remove("is-stale");
-        wrap.innerHTML = `<div class="office-preview-empty ${cls}"><strong>${title}</strong><br />${detail}</div>`;
+        wrap.innerHTML = `<div class="office-preview-empty ${cls}"><strong>${title}</strong>${extra}</div>`;
       });
-      setPreviewStatus(detail || title);
+      setPreviewStatus(title || detail || "预览");
     }
 
     function renderOfficePreviewPages(pages, meta) {
@@ -1776,11 +1808,10 @@
           wrap.appendChild(img);
         });
       });
-      const eng = (meta && meta.engine) ? String(meta.engine).toUpperCase() : "Office";
       if (stale) {
-        setPreviewStatus(`${eng} 预览 · 显示上次结果，正在后台更新…`);
+        setPreviewStatus("预览更新中");
       } else {
-        setPreviewStatus(`${eng} 预览 · ${pages.length} 页`);
+        setPreviewStatus(`预览 · ${pages.length} 页`);
       }
     }
 
@@ -1793,26 +1824,18 @@
       if (step < 2) return;
       if (lastPreviewPages && lastPreviewPages.length) return;
       if (previewing) {
-        renderOfficePreviewEmpty("loading", "正在生成预览", "后台排版中…");
+        renderOfficePreviewEmpty("loading", "正在生成预览");
         return;
       }
       if (!previewUnlocked()) {
-        let title = "等待选择版式";
-        let detail = "请先选择有章 / 无章版式";
-        if (isMinutes()) {
-          title = "等待补全纪要必填";
-          detail = "需纪要标志、正文，以及出席或「本件无」";
-        } else if (isOrder()) {
-          title = "等待补全命令必填";
-          detail = "需标志、令号、正文、职务与成文日期";
-        } else if (isLetter()) {
-          title = "等待补全信函必填";
-          detail = "需标志、字号、标题、主送、正文、署名与成文日期";
-        }
-        renderOfficePreviewEmpty("wait", title, detail);
+        let title = "请选择版式";
+        if (isMinutes()) title = "请补全纪要必填";
+        else if (isOrder()) title = "请补全命令必填";
+        else if (isLetter()) title = "请补全信函必填";
+        renderOfficePreviewEmpty("wait", title);
         return;
       }
-      renderOfficePreviewEmpty("wait", "暂无预览", "停手或离开输入框后将自动生成");
+      renderOfficePreviewEmpty("wait", "暂无预览");
     }
 
     function markPreviewPending() {
@@ -1822,7 +1845,7 @@
       }
       // 打字中不踢预览：有旧图继续看，只改状态文案
       if (lastPreviewPages && lastPreviewPages.length) {
-        setPreviewStatus("有改动 · 离开输入框或停手后更新");
+        setPreviewStatus("有改动");
         return;
       }
       syncPreviewPlaceholder();
@@ -1873,9 +1896,7 @@
       const fp = previewFingerprint();
       if (!force && fp === lastPreviewHash && lastPreviewPages && lastPreviewPages.length) {
         renderOfficePreviewPages(lastPreviewPages, lastPreviewMeta);
-        setPreviewStatus(
-          `${String((lastPreviewMeta && lastPreviewMeta.engine) || "office").toUpperCase()} 预览 · 已是最新`
-        );
+        setPreviewStatus("预览");
         return;
       }
 
@@ -1883,7 +1904,7 @@
       if (lastPreviewPages && lastPreviewPages.length) {
         renderOfficePreviewPages(lastPreviewPages, { ...(lastPreviewMeta || {}), stale: true });
       } else {
-        renderOfficePreviewEmpty("loading", "正在生成预览", "已选版式，后台排版中…");
+        renderOfficePreviewEmpty("loading", "正在生成预览");
       }
 
       if (previewing) {
@@ -1897,7 +1918,7 @@
       previewing = true;
       previewPendingFp = null;
       setPreviewUpdating(true);
-      setPreviewStatus("正在后台更新预览…");
+      setPreviewStatus("预览更新中");
 
       try {
         let data;
@@ -2126,31 +2147,31 @@
       }
       if (alertText) {
         if (isMinutes()) {
-          alertText.innerHTML = "纪要导出需：<strong>纪要标志</strong>、<strong>正文</strong>，以及出席名单或勾选「本件无」。";
+          alertText.innerHTML = "请补全纪要必填";
         } else if (isOrder()) {
-          alertText.innerHTML = "命令导出需：<strong>标志</strong>、<strong>令号</strong>、<strong>正文</strong>、<strong>职务</strong>、<strong>成文日期</strong>。";
+          alertText.innerHTML = "请补全命令必填";
         } else if (isLetter()) {
-          alertText.innerHTML = "信函导出需：<strong>标志</strong>（不加「文件」）、<strong>字号</strong>、<strong>标题</strong>、<strong>主送</strong>、<strong>正文</strong>、<strong>署名</strong>、<strong>成文日期</strong>。";
+          alertText.innerHTML = "请补全信函必填";
         } else {
-          alertText.innerHTML = "请先选择<strong>有章 / 无章版式</strong>。未选择时无法进入导出。";
+          alertText.innerHTML = "请选择<strong>有章 / 无章版式</strong>";
         }
       }
       exportAlert.style.display = ok ? "none" : "flex";
       document.getElementById("export-alert-text").textContent = ok
         ? ""
         : (isMinutes()
-          ? "纪要必填未齐（标志 / 正文 / 出席或本件无），请返回「确认要素」补全。"
+          ? "纪要必填未齐"
           : isOrder()
-            ? "命令必填未齐（标志 / 令号 / 正文 / 职务 / 日期），请返回「确认要素」补全。"
+            ? "命令必填未齐"
             : isLetter()
-              ? "信函必填未齐（标志 / 字号 / 标题 / 主送 / 正文 / 署名 / 日期），请返回「确认要素」补全。"
-              : "尚未选择落款版式（seal_mode），无法导出。请返回「确认要素」选择。");
+              ? "信函必填未齐"
+              : "请选择落款版式");
       if (isMinutes()) {
         sealChip.textContent = "文种：会议纪要";
       } else if (isOrder()) {
         sealChip.textContent = "文种：命令（令）";
       } else if (isLetter()) {
-        sealChip.textContent = "文种：信函（有章位）";
+        sealChip.textContent = "文种：信函";
       } else {
         sealChip.textContent = sealMode
           ? (sealMode === "stamp_layout" ? "版式：有章" : "版式：无章")
@@ -2691,10 +2712,10 @@
         return;
       }
       if (![...rawText.value].length) {
-        showToast("请先粘贴或导入公文文本");
+        showToast("请粘贴或导入公文文本");
         return;
       }
-      setRecognizing(true, "识别中，请稍候", "复杂文稿或脏换行可能稍慢，请勿重复点击");
+      setRecognizing(true, "识别中", "请稍候");
       try {
         let data;
         if (backend && typeof backend.startRecognize === "function") {
@@ -2708,9 +2729,8 @@
         // 先关遮罩再切步骤/填表，避免大布局在 blur/遮罩下重绘闪烁
         setRecognizing(false);
         applyRecognizeResult(data);
-        document.getElementById("recognizer-label").textContent = "识别：" + (data.recognizer || "").toUpperCase();
         setStep(2);
-        showToast("识别完成（" + (data.recognizer || "") + "）");
+        showToast("识别完成");
       } catch (err) {
         setRecognizing(false);
         showToast(String(err.message || err));
@@ -2721,12 +2741,12 @@
       if (!previewUnlocked()) {
         showToast(
           isMinutes()
-            ? "纪要必填未齐，无法导出"
+            ? "纪要必填未齐"
             : isOrder()
-              ? "命令必填未齐，无法导出"
+              ? "命令必填未齐"
               : isLetter()
-                ? "信函必填未齐，无法导出"
-                : "未选择落款版式，无法导出"
+                ? "信函必填未齐"
+                : "请选择落款版式"
         );
         return;
       }
@@ -2751,12 +2771,12 @@
           document.getElementById("confirm-alert").classList.add("error");
           showToast(
             isMinutes()
-              ? "请补全纪要必填（标志 / 正文 / 出席或本件无）"
+              ? "请补全纪要必填"
               : isOrder()
-                ? "请补全命令必填（标志 / 令号 / 正文 / 职务 / 日期）"
+                ? "请补全命令必填"
                 : isLetter()
-                  ? "请补全信函必填（标志 / 字号 / 标题 / 主送 / 正文 / 署名 / 日期）"
-                  : "请先选择有章 / 无章版式"
+                  ? "请补全信函必填"
+                  : "请选择有章 / 无章版式"
           );
           return;
         }
@@ -2891,7 +2911,7 @@
         }
         refreshExportGate();
         // 选完版式立刻生成预览
-        renderOfficePreviewEmpty("loading", "正在生成预览", "已选版式，后台排版中…");
+        renderOfficePreviewEmpty("loading", "正在生成预览");
         requestOfficePreview({ force: true });
         showToast(sealMode === "stamp_layout" ? "已选：有章版式" : "已选：无章版式");
       });
@@ -3172,8 +3192,6 @@
 
     function connectBackend() {
       if (typeof qt === "undefined" || !qt.webChannelTransport) {
-        document.getElementById("app-sub").textContent = "浏览器预览模式 · 后端未连接（请运行 py main.py）";
-        document.getElementById("recognizer-label").textContent = "识别：未连接";
         return;
       }
       new QWebChannel(qt.webChannelTransport, (channel) => {
@@ -3199,16 +3217,8 @@
         backend.getAppInfo((raw) => {
           try {
             const info = JSON.parse(raw);
-            document.getElementById("app-sub").textContent =
-              `本地离线 · 识别器 ${String(info.recognizer || "").toUpperCase()} · GB/T 9704-2012`;
-            document.getElementById("recognizer-label").textContent =
-              "识别：" + String(info.recognizer || "").toUpperCase();
-            const chip = document.getElementById("import-recognizer-chip");
-            if (chip) chip.textContent = "识别器：" + String(info.recognizer || "—").toUpperCase();
             setDebugFieldTrace(!!info.debug_field_trace);
-          } catch (_) {
-            document.getElementById("app-sub").textContent = "本地离线 · 后端已连接";
-          }
+          } catch (_) {}
         });
       });
     }
