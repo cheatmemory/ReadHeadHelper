@@ -34,6 +34,19 @@ from core.recognize import create_recognizer
 from core.text_extract import extract_text_from_docx
 
 
+def _org_signature_for_ui(raw: str) -> str:
+    """确认页是单行 input：换行会被浏览器吃掉变成粘连，联合署名改顿号展示（与红头标志一致）。"""
+    parts: list[str] = []
+    for line in (raw or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        s = line.strip()
+        if not s:
+            continue
+        for p in split_names(s):
+            if p:
+                parts.append(p)
+    return "、".join(parts)
+
+
 class BackendBridge(QObject):
     statusChanged = Signal(str)
     toast = Signal(str)
@@ -85,7 +98,7 @@ class BackendBridge(QObject):
                 "title": ir.title,
                 "recipient": ir.recipient,
                 "attachment_caption": ir.attachment_caption,
-                "org_signature": ir.org_signature,
+                "org_signature": _org_signature_for_ui(ir.org_signature),
                 "date": ir.date,
                 "note": ir.note,
                 "cc_recipients": ir.cc_recipients,

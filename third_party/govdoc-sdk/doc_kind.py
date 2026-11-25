@@ -60,10 +60,23 @@ ALL_FIELDS = COMMON_FIELDS + ["期号", "出席", "请假", "列席", "令号", 
 _TAIL_RE = re.compile(r"^[\u4e00-\u9fa5A-Za-z0-9（）()《》、]{2,60}纪要$")
 
 # 命令版头行：以「令」结尾的机关名（含「中华人民共和国主席令」「××市人民政府令」）
-_ORDER_MARK_RE = re.compile(r"^[\u4e00-\u9fa5（）]{4,30}令$")
+_ORDER_MARK_RE = re.compile(r"^[\u4e00-\u9fa5（）]{4,30}(?:命令|令)$")
 
 # 令号：独立一行「第1号」「第三号」
-_ORDER_NO_RE = re.compile(r"^第\s*[0-9０-９〇一二三四五六七八九十百]{1,6}\s*号$")
+_ORDER_NO_RE = re.compile(r"^第\s*[0-9０-９〇一二三四五六七八九十百两]{1,6}\s*号$")
+
+# 无换行/脏换行：文首「…令」紧挨「第N号」（模型与版式都依赖这对锚点）
+_ORDER_HEAD_PAIR_RE = re.compile(
+    r"([\u4e00-\u9fa5（）]{4,30}(?:命令|令))\s*(第\s*[0-9０-９〇一二三四五六七八九十百两]{1,6}\s*号)"
+)
+_ORDER_NO_INLINE_RE = re.compile(
+    r"第\s*[0-9０-９〇一二三四五六七八九十百两]{1,6}\s*号"
+)
+_ORDER_SIGN_LINE_RE = re.compile(
+    r"([\u4e00-\u9fa5（）]{2,24})[：:]\s*([\u4e00-\u9fa5·]{2,8})"
+)
+# 汉字年号含「〇」（如二〇二六）；勿写成 二[〇零0-9]{3}——中间的「二」不在该类里
+_ORDER_DATE_LEAD_RE = re.compile(r"(?:[〇零一二三四五六七八九十]{4}|[0-9]{4})年")
 
 # 信函标题行：关于…的函 / 复函 / 告知函；前面可带发文机关名，也可直接以「关于」开头。
 # 国标与实务均常见「关于××的函」；通知/批复等不以「函」结尾，不会误中。
@@ -93,14 +106,66 @@ def _head_lines(text, head_lines=8):
     return out
 
 
+def _looks_like_order_flat(text: str) -> bool:
+    """无换行/少换行时的命令判定：文首「…令」+「第N号」，且无发文字号。"""
+    if not text or _DOCNO_RE.search(text):
+        return False
+    head = text[:240]
+    if _ORDER_HEAD_PAIR_RE.search(head):
+        return True
+    # 文首即令名，后文（仍在前段）出现令号
+    if re.match(r"^[\u4e00-\u9fa5（）]{4,30}(?:命令|令)(?:[\s　]|第)", text.lstrip()):
+        return bool(_ORDER_NO_INLINE_RE.search(head))
+    return False
+
+
+def soften_layout_breaks(text: str) -> str:
+    """少换行命令稿：在令名/令号/签署/日期锚点补软换行，改善 span 模型切界。
+
+    已有足够换行（≥4）或看不出命令版式时原样返回，避免误伤通用公文。
+    """
+    text = _strip_bom(text or "")
+    if not text or text.count("\n") >= 4:
+        return text
+    if not _looks_like_order_flat(text):
+        return text
+    s = text
+    s = _ORDER_HEAD_PAIR_RE.sub(r"\1\n\2\n", s, count=1)
+    s = re.sub(r"(号)\s*([《])", r"\1\n\n\2", s, count=1)
+    # 正文句末 → 签署职务：姓名 → 成文日期（整段年月日）
+    _date = (
+        r"((?:[〇零一二三四五六七八九十]{4}|[0-9]{4})年"
+        r"[〇零一二三四五六七八九十0-9]{1,4}月"
+        r"[〇零一二三四五六七八九十0-9]{1,6}日)"
+    )
+    s = re.sub(
+        r"([。；;!?！？])\s*"
+        r"([\u4e00-\u9fa5（）]{2,24}[：:][\u4e00-\u9fa5·]{2,8})\s*"
+        + _date,
+        r"\1\n\n\2\n\3",
+        s,
+        count=1,
+    )
+    if s.count("\n") < 4:
+        s = re.sub(
+            r"\s+([\u4e00-\u9fa5（）]{2,24}[：:][\u4e00-\u9fa5·]{2,8})\s*"
+            + _date,
+            r"\n\n\1\n\2",
+            s,
+            count=1,
+        )
+    return s
+
+
 def detect(text, head_lines=8):
     """判文种。
 
     1. 前若干非空行出现「…纪要」版头行（不含「关于」）=> 会议纪要
-    2. 版头行以「令」结尾 => 命令
+    2. 版头行以「令/命令」结尾 => 命令
     3. 有独立「第N号」行且全文没有发文字号 => 命令（版头被 OCR 打散时的退路）
-    4. 前若干非空行出现「关于…的函/复函」标题行 => 信函
-    5. 其余 => 通用公文
+    4. 文首「…令」与「第N号」粘在同一段（无换行）=> 命令
+    5. 前若干非空行出现「关于…的函/复函」标题行 => 信函
+    6. 其余 => 通用公文
     """
     text = _strip_bom(text)
     head = _head_lines(text, head_lines)
@@ -111,6 +176,8 @@ def detect(text, head_lines=8):
         if _ORDER_MARK_RE.match(s) and "关于" not in s:
             return KIND_ORDER
     if any(_ORDER_NO_RE.match(s) for s in head) and not _DOCNO_RE.search(text):
+        return KIND_ORDER
+    if _looks_like_order_flat(text):
         return KIND_ORDER
     for s in head:
         if _LETTER_TITLE_RE.match(s):

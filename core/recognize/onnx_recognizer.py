@@ -148,6 +148,10 @@ class OnnxFieldRecognizer:
         # UTF-8 BOM 会导致版头「…纪要」等行首正则失配；统一剥掉
         text = (text or "").lstrip("\ufeff")
         dk = self._doc_kind
+        # 少换行命令稿：先按版式锚点补软换行，再判文种/抽字段（span 模型吃换行边界）
+        soften = getattr(dk, "soften_layout_breaks", None)
+        if callable(soften):
+            text = soften(text)
         kind = dk.detect(text)
         schema = dk.schema_for(kind)
         self._last_doc_kind = kind

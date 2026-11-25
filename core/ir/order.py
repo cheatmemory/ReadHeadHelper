@@ -129,6 +129,13 @@ def looks_like_order(
         s = line.strip()
         if mark_is_order(s):
             return True
+    # 无换行：文首「…令」+「第N号」
+    head = (source_text or "")[:240]
+    if re.search(
+        r"[\u4e00-\u9fa5（）]{4,30}(?:命令|令)\s*第\s*[0-9〇零一二三四五六七八九十百两]+\s*号",
+        head,
+    ) and "〔" not in head and "[" not in head:
+        return True
     return False
 
 

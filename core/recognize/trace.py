@@ -39,14 +39,56 @@ SOURCE_LABELS = {
     "user": "用户改过",
 }
 
-# 名单类：按 span 拆开展示
-MULTI_SPAN_FIELDS = {"出席", "请假", "列席", "附件说明", "签发人", "签署职务", "签署姓名"}
+# 名单类 / 联合机关：按 span 拆开展示
+MULTI_SPAN_FIELDS = {
+    "出席",
+    "请假",
+    "列席",
+    "附件说明",
+    "签发人",
+    "签署职务",
+    "签署姓名",
+    "发文机关署名",
+    "发文机关标志",
+}
 
 
 def _item_text(it: dict[str, Any] | None) -> str:
     if not it:
         return ""
-    return str(it.get("text") or "").replace("\n", "").strip()
+    # 联合机关内部换行改顿号，避免溯源/摘要里两家粘成一串
+    return str(it.get("text") or "").replace("\r\n", "\n").replace("\r", "\n").replace("\n", "、").strip()
+
+
+def _expand_joint_org_items(cn: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """一条里用换行写了多家机关时，拆成多条 span（与确认页顿号展示一致）。"""
+    if cn not in ("发文机关署名", "发文机关标志"):
+        return items
+    out: list[dict[str, Any]] = []
+    for it in items:
+        raw = str(it.get("text") or "").replace("\r\n", "\n").replace("\r", "\n")
+        if "\n" not in raw and "、" not in raw:
+            out.append(it)
+            continue
+        parts: list[str] = []
+        for ln in raw.split("\n"):
+            s = ln.strip()
+            if not s or s in ("文件", "函"):
+                continue
+            if s.endswith("文件") and len(s) > 2:
+                s = s[:-2].strip()
+            for p in s.split("、"):
+                p = p.strip()
+                if p and p not in ("文件", "函"):
+                    parts.append(p)
+        if len(parts) <= 1:
+            out.append(it)
+            continue
+        for p in parts:
+            piece = dict(it)
+            piece["text"] = p
+            out.append(piece)
+    return out
 
 
 def _item_confidence(it: dict[str, Any] | None) -> float | None:
@@ -106,6 +148,8 @@ def build_field_trace(final_result: dict[str, Any] | None) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     for cn, ui in FIELD_UI_MAP.items():
         items = [it for it in (final_result.get(cn) or []) if isinstance(it, dict) and _item_text(it)]
+        items = _expand_joint_org_items(cn, items)
+        items = [it for it in items if _item_text(it)]
         if not items:
             continue
         if cn in MULTI_SPAN_FIELDS or len(items) > 1:
