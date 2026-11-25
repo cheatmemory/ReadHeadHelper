@@ -91,9 +91,90 @@ def format_order_no(raw: str) -> str:
     return ""
 
 
+DEFAULT_ORDER_MARK_SUFFIX = "令"
+
+
+def extract_order_mark_suffix(raw: str) -> str:
+    """从标志文本取尾缀：命令 / 令；无则空串。"""
+    t = (raw or "").strip()
+    if t.endswith("命令"):
+        return "命令"
+    if t.endswith("令") and not t.endswith("纪要"):
+        return "令"
+    return ""
+
+
+def strip_order_mark_suffix(raw: str) -> str:
+    """剥掉末尾「命令」或「令」（命令优先）。"""
+    t = (raw or "").strip()
+    if t.endswith("命令"):
+        return t[: -len("命令")].rstrip(" 　")
+    if t.endswith("令") and not t.endswith("纪要"):
+        return t[:-1].rstrip(" 　")
+    return t
+
+
+def parse_order_org_marks(
+    raw: str | list[str] | None,
+    *,
+    default_suffix: str = DEFAULT_ORDER_MARK_SUFFIX,
+) -> tuple[list[str], str]:
+    """拆联合机关 + 抽尾缀。
+
+    返回 (干净机关名列表, 令|命令)。缺尾缀时用 default_suffix（默认「令」）。
+    拆分：顿号/逗号；亦兼容全角空格分隔的双机关行。
+    """
+    if raw is None:
+        return [], default_suffix
+    if isinstance(raw, list):
+        parts = [str(p).strip() for p in raw if str(p).strip()]
+        joined = "、".join(parts)
+    else:
+        joined = str(raw).strip()
+        parts = []
+
+    suffix = extract_order_mark_suffix(joined)
+    body = strip_order_mark_suffix(joined) if suffix else joined
+
+    if not parts:
+        # 顿号/逗号优先；否则按 2+ 全角/多空格切开（联合红头常见）
+        if re.search(r"[、，,]", body):
+            parts = [p.strip() for p in re.split(r"[、，,]+", body) if p.strip()]
+        else:
+            parts = [p.strip() for p in re.split(r"[\s　]{2,}|\s*　\s*", body) if p.strip()]
+            if len(parts) == 1 and "　" in body:
+                parts = [p.strip() for p in body.split("　") if p.strip()]
+
+    names: list[str] = []
+    for p in parts:
+        n = strip_order_mark_suffix(ensure_order_mark(p) or p).strip()
+        if n:
+            names.append(n)
+    if not names and body.strip():
+        names = [body.strip()]
+
+    if not suffix:
+        suffix = default_suffix if names else ""
+    return names, suffix
+
+
+def compose_order_mark(names: list[str], suffix: str) -> str:
+    """单机关：名+后缀；联合展示串（UI）：顿号连接 + 后缀。"""
+    s = (suffix or DEFAULT_ORDER_MARK_SUFFIX).strip() or DEFAULT_ORDER_MARK_SUFFIX
+    clean = [strip_order_mark_suffix(n).strip() for n in names if str(n).strip()]
+    clean = [n for n in clean if n]
+    if not clean:
+        return ""
+    if len(clean) == 1:
+        return clean[0] + s
+    return "、".join(clean) + s
+
+
 def order_export_basename(ir: LayoutIR) -> str:
     """命令导出文件名：标志 + 令号。例：江州市人民政府令第1号.docx"""
-    mark = (ir.primary_org_mark() or "").strip() or "命令"
+    suffix = (getattr(ir, "order_mark_suffix", "") or "").strip() or DEFAULT_ORDER_MARK_SUFFIX
+    names = [str(m).strip() for m in (ir.org_marks or []) if str(m).strip()]
+    mark = compose_order_mark(names, suffix) or "命令"
     ono = format_order_no(ir.order_no)
     stem = _WIN_BAD_CHARS.sub("", mark + ono).strip(" .") or "命令"
     return stem + ".docx"
@@ -107,11 +188,13 @@ def mark_is_order(mark: str) -> bool:
     # 正文套语，不是发文机关标志
     if t in {"此令", "特此令", "令"}:
         return False
+    # 联合标志可较长（多机关全称 + 令）
+    max_len = 120 if ("、" in t or "　" in t) else 40
     if t.endswith("命令"):
-        return len(t) <= 40
+        return len(t) <= max_len
     if t.endswith("令") and not t.endswith("纪要"):
         # 排除过长正文行；过短如「市令」也不当标志
-        return 4 <= len(t) <= 40 and not t.startswith("关于")
+        return 4 <= len(t) <= max_len and not t.startswith("关于")
     return False
 
 
@@ -119,12 +202,19 @@ def looks_like_order(
     *,
     org_marks: list[str] | None = None,
     source_text: str = "",
+    order_mark_suffix: str = "",
 ) -> bool:
     """baseline §1：仅按标志槽以「命令/令」结尾判定；不因正文偶现「命令」误切。"""
-    for m in org_marks or []:
+    suffix = (order_mark_suffix or "").strip()
+    marks = [str(m).strip() for m in (org_marks or []) if str(m).strip()]
+    if marks and suffix in {"令", "命令"}:
+        return True
+    for m in marks:
         if mark_is_order(m):
             return True
-    # 原文前若干行：独立成行的短标志
+        # 多机关已剥尾缀时，拼回再判
+        if len(marks) >= 2 and mark_is_order(compose_order_mark(marks, DEFAULT_ORDER_MARK_SUFFIX)):
+            return True
     for line in (source_text or "").splitlines()[:20]:
         s = line.strip()
         if mark_is_order(s):
@@ -151,12 +241,32 @@ def ensure_order_mark(mark: str) -> str:
     return t
 
 
+def order_mark_ok(ir: LayoutIR) -> bool:
+    """导出门槛：有机关名，且能还原为以令/命令结尾的标志。"""
+    names = [str(m).strip() for m in (ir.org_marks or []) if str(m).strip()]
+    if not names:
+        return False
+    suffix = (getattr(ir, "order_mark_suffix", "") or "").strip()
+    if suffix not in {"令", "命令"}:
+        # 兼容尚未拆尾缀的旧 IR：名本身已带令/命令
+        if len(names) == 1 and mark_is_order(names[0]):
+            return True
+        suffix = DEFAULT_ORDER_MARK_SUFFIX
+    composed = compose_order_mark(names, suffix)
+    return bool(composed) and (
+        mark_is_order(composed) or (len(names) >= 2 and suffix in {"令", "命令"})
+    )
+
+
 def strip_signer_title(raw: str) -> str:
-    """职务行只留职衔；去掉「市长　张明远」类姓名。"""
+    """职务行只留职衔；去掉「市长　张明远」「部长：孟桂英」类姓名。"""
     t = (raw or "").strip()
     if not t:
         return ""
-    # 已是纯短职务
+    # 部长：姓名 / 市长:姓名
+    if "：" in t or ":" in t:
+        t = re.split(r"[:：]", t, maxsplit=1)[0].strip()
+    # 已是纯短职务；或「职务　姓名」
     if "　" in t or "  " in t:
         t = re.split(r"[\s　]+", t, maxsplit=1)[0].strip()
     else:
@@ -221,21 +331,22 @@ def apply_order_to_ir(
     if ir.recipient.strip():
         ir.recipients_in_footer = True
 
-    marks = [ensure_order_mark(m) for m in (ir.org_marks or [])]
-    marks = [m for m in marks if m]
-    if not marks and model is not None:
+    raw_marks = [ensure_order_mark(m) for m in (ir.org_marks or [])]
+    raw_marks = [m for m in raw_marks if m]
+    if not raw_marks and model is not None:
         om = getattr(getattr(model, "header", None), "org_mark", "") or ""
-        if mark_is_order(om):
-            marks = [ensure_order_mark(om)]
-    if not marks:
+        if mark_is_order(om) or "、" in om:
+            raw_marks = [ensure_order_mark(om)]
+    if not raw_marks:
         for line in (source_text or "").splitlines()[:20]:
             s = line.strip()
             if mark_is_order(s):
-                marks = [s]
+                raw_marks = [s]
                 break
-    ir.org_marks = marks
 
+    model_suffix = ""
     if model is not None:
+        model_suffix = str(getattr(model, "_order_mark_suffix", "") or "").strip()
         ono = getattr(model, "_order_no", "") or ""
         if ono and not ir.order_no.strip():
             ir.order_no = format_order_no(str(ono)) or str(ono).strip()
@@ -245,6 +356,22 @@ def apply_order_to_ir(
         sdk_cc = getattr(model, "_sdk_cc", "") or ""
         if sdk_cc and not ir.cc_recipients.strip():
             ir.cc_recipients = str(sdk_cc).strip()
+        model_names = getattr(model, "_order_org_marks", None)
+        if model_names:
+            raw_marks = [str(x).strip() for x in model_names if str(x).strip()] or raw_marks
+
+    names, suffix = parse_order_org_marks(
+        raw_marks if len(raw_marks) > 1 else (raw_marks[0] if raw_marks else ""),
+        default_suffix=model_suffix or DEFAULT_ORDER_MARK_SUFFIX,
+    )
+    if model_suffix in {"令", "命令"}:
+        suffix = model_suffix
+    if not names and raw_marks:
+        names, suffix2 = parse_order_org_marks("、".join(raw_marks))
+        if not suffix or suffix == DEFAULT_ORDER_MARK_SUFFIX:
+            suffix = suffix2
+    ir.org_marks = names
+    ir.order_mark_suffix = suffix if suffix in {"令", "命令"} else DEFAULT_ORDER_MARK_SUFFIX
 
     if not ir.order_no.strip():
         ir.order_no = extract_order_no(source_text, doc_number=ir.doc_number)

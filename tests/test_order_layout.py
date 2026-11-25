@@ -14,6 +14,7 @@ from core.ir.order import (
     format_order_no,
     looks_like_order,
     order_export_basename,
+    parse_order_org_marks,
     strip_signer_title,
 )
 from core.ir.schema import BodyBlock, DocKind, LayoutIR, ModelOutput
@@ -56,7 +57,8 @@ def _has_red_banner_line(doc: Document) -> bool:
 def _minimal_order(**kwargs) -> LayoutIR:
     ir = LayoutIR(
         doc_kind=DocKind.ORDER,
-        org_marks=["江州市人民政府令"],
+        org_marks=["江州市人民政府"],
+        order_mark_suffix="令",
         order_no="第1号",
         body_tree=[BodyBlock(level="p", text="《……办法》已经……现予公布，自2027年1月1日起施行。")],
         signers=["市长"],
@@ -241,3 +243,78 @@ def test_order_model_attrs_to_ir():
     assert ir.order_no == "第1号"
     assert ir.signers == ["市长"]
     assert "张明远" not in "".join(ir.signers)
+    assert ir.org_marks == ["江州市人民政府"]
+    assert ir.order_mark_suffix == "令"
+
+
+def test_parse_order_org_marks_joint_and_suffix():
+    names, suf = parse_order_org_marks(
+        "中华人民共和国生态环境部、中华人民共和国商务部令"
+    )
+    assert names == ["中华人民共和国生态环境部", "中华人民共和国商务部"]
+    assert suf == "令"
+    names2, suf2 = parse_order_org_marks(
+        "中华人民共和国生态环境部　中华人民共和国商务部令"
+    )
+    assert names2 == ["中华人民共和国生态环境部", "中华人民共和国商务部"]
+    assert suf2 == "令"
+    names3, suf3 = parse_order_org_marks(["甲机关", "乙机关"])
+    assert names3 == ["甲机关", "乙机关"]
+    assert suf3 == "令"
+    _, suf4 = parse_order_org_marks("某某人民政府命令")
+    assert suf4 == "命令"
+
+
+def test_joint_order_banner_layout(tmp_path):
+    """联合红头：左列两行整名不拆字，右列「令」；无顿号硬折。"""
+    ir = _minimal_order(
+        org_marks=["中华人民共和国生态环境部", "中华人民共和国商务部"],
+        order_mark_suffix="令",
+        order_no="第10号",
+        signers=["部长", "部长"],
+        date="2026年11月18日",
+        body_tree=[BodyBlock(level="p", text="决定任命范桂英为省财政厅厅长。")],
+    )
+    path = tmp_path / "joint_order.docx"
+    DocxEngine().render(ir, path)
+    doc = Document(str(path))
+    joined = _all_text(doc)
+    assert "中华人民共和国生态环境部" in joined
+    assert "中华人民共和国商务部" in joined
+    assert "令" in joined
+    assert "生态环境部、中华人" not in joined
+    assert "第10号" in joined
+    assert len(doc.tables) >= 1
+    banner = doc.tables[0]
+    left_lines = [p.text.strip() for p in banner.rows[0].cells[0].paragraphs if p.text.strip()]
+    right = banner.rows[0].cells[1].text.strip()
+    assert left_lines == ["中华人民共和国生态环境部", "中华人民共和国商务部"]
+    assert right == "令"
+
+
+def test_joint_order_suffix_命令(tmp_path):
+    ir = _minimal_order(
+        org_marks=["某某省人民政府", "某某市人民政府"],
+        order_mark_suffix="命令",
+        order_no="第2号",
+        signers=["省长", "市长"],
+    )
+    path = tmp_path / "joint_mingling.docx"
+    DocxEngine().render(ir, path)
+    doc = Document(str(path))
+    right = doc.tables[0].rows[0].cells[1].text.strip()
+    assert right == "命令"
+
+
+def test_apply_order_joint_from_source():
+    ir = LayoutIR(
+        org_marks=["中华人民共和国生态环境部、中华人民共和国商务部令"],
+        body_tree=[BodyBlock(level="p", text="决定任命。")],
+        signers=["部长", "部长"],
+        date="2026年11月18日",
+        order_no="第10号",
+    )
+    apply_order_to_ir(ir, "")
+    assert ir.doc_kind == DocKind.ORDER
+    assert ir.org_marks == ["中华人民共和国生态环境部", "中华人民共和国商务部"]
+    assert ir.order_mark_suffix == "令"

@@ -13,7 +13,11 @@ from docx.shared import Mm, Pt, RGBColor, Twips
 
 from core.body_structure.parser import normalize_structure_markers
 from core.ir.minutes import format_issue_no
-from core.ir.order import format_order_no
+from core.ir.order import (
+    DEFAULT_ORDER_MARK_SUFFIX,
+    compose_order_mark,
+    format_order_no,
+)
 from core.ir.schema import BodyBlock, LayoutIR, SealMode
 from core.layout import units as U
 from core.layout.attach_merge import append_docx_body, load_attachment_bytes
@@ -840,11 +844,22 @@ class DocxEngine:
         return out_path
 
     def _write_order_banner(self, doc: Document, ir: LayoutIR) -> None:
-        """标志（红小标宋，墨迹顶=版心顶+20mm）→ 空2行 → 令号 → 空2行。"""
-        mark = ir.primary_org_mark().strip()
+        """标志（红小标宋，墨迹顶=版心顶+20mm）→ 空2行 → 令号 → 空2行。
+
+        联合：同通用联合红头表，右侧为「令/命令」而非「文件」。
+        """
+        marks = [str(m).strip() for m in (ir.org_marks or []) if str(m).strip()]
+        suffix = (ir.order_mark_suffix or "").strip() or DEFAULT_ORDER_MARK_SUFFIX
+        if suffix not in {"令", "命令"}:
+            suffix = DEFAULT_ORDER_MARK_SUFFIX
         mark_face = self.fonts["xiaobiaosong"]
-        # 与纪要同算法（≥26pt 单行优先）
-        mark_font_pt, allow_wrap = _minutes_mark_font_pt(mark, mark_face)
+        joint_plan = None
+        if len(marks) >= 2:
+            joint_plan = self._plan_joint_header(marks, mark_face, suffix=suffix)
+            mark_font_pt = float(joint_plan["size_pt"])
+        else:
+            mark = compose_order_mark(marks, suffix) if marks else ""
+            mark_font_pt, allow_wrap = _minutes_mark_font_pt(mark, mark_face)
 
         ink_inset_mm = _mark_ink_inset_mm(mark_font_pt, self.line_pt)
         spacer_mm = max(0.0, U.ORDER_MARK_FROM_BODY_TOP_MM - ink_inset_mm)
@@ -855,22 +870,26 @@ class DocxEngine:
             _disable_snap_to_grid(sp)
             _set_run_font(sp.add_run(""), name=self.fonts["fangsong"], size_pt=0.5)
 
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        _set_spacing_for_font(p, mark_font_pt, grid_line_pt=self.line_pt)
-        if not allow_wrap:
-            pPr = p._p.get_or_add_pPr()
-            if pPr.find(qn("w:wordWrap")) is None:
-                ww = OxmlElement("w:wordWrap")
-                ww.set(qn("w:val"), "0")
-                pPr.append(ww)
-        run = p.add_run(mark)
-        _set_run_font(
-            run,
-            name=mark_face,
-            size_pt=mark_font_pt,
-            color=RGBColor(255, 0, 0),
-        )
+        if joint_plan is not None:
+            self._write_joint_header_table(doc, mark_face, joint_plan)
+        else:
+            mark = compose_order_mark(marks, suffix) if marks else ""
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            _set_spacing_for_font(p, mark_font_pt, grid_line_pt=self.line_pt)
+            if not allow_wrap:
+                pPr = p._p.get_or_add_pPr()
+                if pPr.find(qn("w:wordWrap")) is None:
+                    ww = OxmlElement("w:wordWrap")
+                    ww.set(qn("w:val"), "0")
+                    pPr.append(ww)
+            run = p.add_run(mark)
+            _set_run_font(
+                run,
+                name=mark_face,
+                size_pt=mark_font_pt,
+                color=RGBColor(255, 0, 0),
+            )
 
         _empty_grid_lines(doc, 2, self.line_pt)
         order_no = format_order_no(ir.order_no)
@@ -1896,7 +1915,7 @@ class DocxEngine:
         joint_plan = None
         if len(marks) >= 2:
             joint_names = [_strip_wenjian_suffix(m) or m for m in marks]
-            joint_plan = self._plan_joint_header(joint_names, mark_face)
+            joint_plan = self._plan_joint_header(joint_names, mark_face, suffix="文件")
             mark_font_pt = float(joint_plan["size_pt"])
         else:
             mark_font_pt = float(_max_one_line_mark_font_pt(marks[0], mark_face))
@@ -1942,6 +1961,28 @@ class DocxEngine:
         # 红线下空二行
         _empty_grid_lines(doc, 2, self.line_pt)
 
+    @staticmethod
+    def _joint_text_width_pt(text: str, mark_face: str, size_pt: float) -> float:
+        """联合红头测宽：取偏保守（最大）值。
+
+        Office COM 对大字号偶发测偏小 → 字号选太大 → 格内拆字折行。
+        与 GDI/估算取 max，杜绝「发文机关跨行」。
+        """
+        t = (text or "").strip()
+        if not t:
+            return 0.0
+        cands: list[float] = []
+        gdi = measure_text_width_pt(t, mark_face, size_pt)
+        if gdi is not None and gdi > 0:
+            cands.append(float(gdi))
+        cands.append(float(estimate_text_width_pt(t, size_pt)))
+        layout = layout_text_width_pt(t, mark_face, size_pt)
+        if layout is not None and layout > 0:
+            # COM 明显偏小（小于「字数×字号×0.6」）则丢弃
+            if layout >= len(t) * float(size_pt) * 0.6:
+                cands.append(float(layout))
+        return max(cands) if cands else float(len(t)) * float(size_pt)
+
     def _pack_joint_header_rows(
         self,
         marks: list[str],
@@ -1956,7 +1997,7 @@ class DocxEngine:
         pad = 1.15  # 相对测宽多留余量，避免格内再折行
         # 任一单名本身超宽 → 此字号不可用（单名绝不拆字）
         for name in marks:
-            if layout_text_width_pt(name, mark_face, size_pt) * pad > max_width_pt:
+            if self._joint_text_width_pt(name, mark_face, size_pt) * pad > max_width_pt:
                 return None
 
         allow_pair = len(marks) >= 4
@@ -1965,7 +2006,7 @@ class DocxEngine:
         while i < len(marks):
             if allow_pair and i + 1 < len(marks):
                 paired = _join_org_row([marks[i], marks[i + 1]])
-                if layout_text_width_pt(paired, mark_face, size_pt) * pad <= max_width_pt:
+                if self._joint_text_width_pt(paired, mark_face, size_pt) * pad <= max_width_pt:
                     rows.append(paired)
                     i += 2
                     continue
@@ -1973,27 +2014,34 @@ class DocxEngine:
             i += 1
         return rows
 
-    def _plan_joint_header(self, marks: list[str], mark_face: str) -> dict:
+    def _plan_joint_header(
+        self,
+        marks: list[str],
+        mark_face: str,
+        *,
+        suffix: str = "文件",
+    ) -> dict:
         """选定联合红头字号、行内容与列宽（供垫高计算与写表共用）。
 
-        所有机关行共用同一字号；单名绝不拆字。大字号测宽不可靠时向下收敛，
-        必要时可低于 3 号，避免最长机关名在格内折行。
+        suffix：通用为「文件」，命令为「令」或「命令」。
+        单名绝不拆字：字号可低于 3 号直至约 10pt；测宽取保守值防格内折行。
         """
+        suffix = (suffix or "文件").strip() or "文件"
         body_w = U.mm_to_twips(U.PAGE["body_width_mm"])
         body_pt = _body_width_pt()
         pad = 1.15
+        min_pt = 10.0
 
         size_pt = float(U.PT_3)
         rows = list(marks)
-        file_w = int(round(size_pt * 2.2 * 20))
+        file_w = int(round(size_pt * max(len(suffix), 1) * 1.1 * 20))
         names_w = body_w - file_w
 
-        # 从默认红头字号降到约 10pt；优先更少行（≥4 时可并排），同行数取更大字号
-        min_pt = 10.0
-        best: tuple | None = None  # (n_rows, -size_pt, size, rows, nw, fw)
+        # 从大红头字号向下试；取「行数最少，其次字号最大」
+        best: tuple | None = None  # (n_rows, -size, size, rows, nw, fw)
         for trial in [x * 0.5 for x in range(int(U.PT_MARK_DEFAULT * 2), int(min_pt * 2) - 1, -1)]:
-            file_pt = layout_text_width_pt("文件", mark_face, trial) * pad
-            gap_pt = trial * 0.35  # 名称块与「文件」之间留约 1/3 字缝
+            file_pt = self._joint_text_width_pt(suffix, mark_face, trial) * pad
+            gap_pt = trial * 0.35
             file_need_pt = file_pt + gap_pt
             max_names_pt = body_pt - file_need_pt
             if max_names_pt < trial * 4:
@@ -2002,11 +2050,11 @@ class DocxEngine:
             if packed is None:
                 continue
             content_pt = max(
-                layout_text_width_pt(line, mark_face, trial) for line in packed
+                self._joint_text_width_pt(line, mark_face, trial) for line in packed
             ) * pad
-            # 左列至少容纳最长一行，避免 Word 再折
-            names_pt = max(content_pt, trial * 2)
-            if names_pt > max_names_pt:
+            # 左列用满「版心−后缀」可用宽，避免测宽偏小时格窄折行
+            names_pt = max_names_pt
+            if content_pt > max_names_pt:
                 continue
             fw = max(1, int(round(file_need_pt * 20)))
             nw = max(1, int(round(names_pt * 20)))
@@ -2024,18 +2072,19 @@ class DocxEngine:
             "rows": rows,
             "names_w": names_w,
             "file_w": file_w,
+            "suffix": suffix,
         }
 
     def _write_joint_header_table(self, doc: Document, mark_face: str, plan: dict) -> None:
-        """联合红头：左列机关分行 + 右列「文件」垂直居中。
+        """联合红头：左列机关分行 + 右列后缀（文件/令/命令）垂直居中。
 
-        列宽按内容自动调：右列只留「文件」二字+小间隙；左列随最长机关名往右拉。
-        整表按内容总宽居中，避免「文件」格虚占半个版心。
+        列宽按内容自动调；整表按内容总宽居中。
         """
         size_pt = float(plan["size_pt"])
         rows = list(plan["rows"])
         names_w = int(plan["names_w"])
         file_w = int(plan["file_w"])
+        suffix = str(plan.get("suffix") or "文件")
         table_w = names_w + file_w
         table = doc.add_table(rows=1, cols=2)
         table.autofit = False
@@ -2084,22 +2133,34 @@ class DocxEngine:
             tcPr = cell._tc.get_or_add_tcPr()
             if tcPr.find(qn("w:noWrap")) is None:
                 tcPr.append(OxmlElement("w:noWrap"))
+            # 右列后缀与左列多行上下居中
+            if cell is right:
+                for old in tcPr.findall(qn("w:vAlign")):
+                    tcPr.remove(old)
+                vAlign = OxmlElement("w:vAlign")
+                vAlign.set(qn("w:val"), "center")
+                tcPr.append(vAlign)
 
-        # 左列：每段一整行（已测宽）；noWrap 禁止在机关名中间折行
+        # 左列：每段一整行（已测宽）；格级 noWrap + 段级禁折行
         left.paragraphs[0].clear()
         for i, line in enumerate(rows):
             p = left.paragraphs[0] if i == 0 else left.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             _set_spacing_for_font(p, size_pt, grid_line_pt=self.line_pt)
+            pPr = p._p.get_or_add_pPr()
+            if pPr.find(qn("w:wordWrap")) is None:
+                ww = OxmlElement("w:wordWrap")
+                ww.set(qn("w:val"), "0")
+                pPr.append(ww)
             run = p.add_run(line)
             _set_run_font(run, name=mark_face, size_pt=size_pt, color=RGBColor(255, 0, 0))
 
-        # 右列：文件（左齐贴名称块；格已收成二字宽）
+        # 右列：后缀（文件 / 令 / 命令）
         rp = right.paragraphs[0]
         rp.clear()
         rp.alignment = WD_ALIGN_PARAGRAPH.LEFT
         _set_spacing_for_font(rp, size_pt, grid_line_pt=self.line_pt)
-        rr = rp.add_run("文件")
+        rr = rp.add_run(suffix)
         _set_run_font(rr, name=mark_face, size_pt=size_pt, color=RGBColor(255, 0, 0))
 
     def _write_docno_and_signers(self, doc: Document, ir: LayoutIR) -> None:
